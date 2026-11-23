@@ -41,6 +41,10 @@ test("public API loads and merges setup options", function()
   equal(config.ollama.model, "test-model")
   equal(config.ollama.url, "http://127.0.0.1:11434")
   equal(config.quickfix.auto_open, false)
+  equal(config.quickfix.height_ratio, 1 / 3)
+  equal(config.quickfix.keep_focus_on_select, true)
+  equal(config.checks.long_sentence, true)
+  equal(config.long_sentence.max_words, 30)
 end)
 
 test("plugin registers public commands", function()
@@ -97,6 +101,49 @@ test("configuration validates the inference backend", function()
   local valid, err = config.validate({ backend = "cloud" })
   equal(valid, nil)
   equal(err, "backend must be 'ollama' or 'fm'")
+end)
+
+test("configuration validates long-sentence and quickfix options", function()
+  local config = require("ai-proofread.config")
+
+  local valid, err = config.validate({
+    long_sentence = { max_words = 0 },
+  })
+  equal(valid, nil)
+  equal(err, "long_sentence.max_words must be a positive integer")
+
+  valid, err = config.validate({
+    quickfix = { height_ratio = 2 },
+  })
+  equal(valid, nil)
+  equal(err, "quickfix.height_ratio must be between 0 and 1")
+
+  valid, err = config.validate({
+    quickfix = { keep_focus_on_select = "yes" },
+  })
+  equal(valid, nil)
+  equal(err, "quickfix.keep_focus_on_select must be a boolean")
+
+  valid, err = config.validate({ long_sentence = false })
+  equal(valid, nil)
+  equal(err, "long_sentence must be a table")
+
+  valid, err = config.validate({
+    ollama = { url = "https://example.com" },
+  })
+  equal(valid, nil)
+  equal(err, "ollama.url must use a loopback host")
+
+  valid, err = config.validate({
+    ollama = { url = "http://[::1]:11434" },
+  })
+  assert(valid)
+
+  valid, err = config.validate({
+    ollama = { url = "http://localhost:" },
+  })
+  equal(valid, nil)
+  equal(err, "ollama.url must use a loopback host")
 end)
 
 test("validator maps a UTF-8 finding to a line-local byte column", function()
@@ -276,7 +323,7 @@ test("Ollama request enforces deterministic structured output", function()
   equal(request.format.type, "object")
   equal(
     request.format.properties.findings.items.properties.type.enum,
-    { "correction" }
+    { "correction", "rewrite" }
   )
   equal(
     request.format.properties.findings.items.properties.category.enum,
@@ -284,6 +331,7 @@ test("Ollama request enforces deterministic structured output", function()
       "spelling",
       "grammar",
       "punctuation",
+      "long_sentence",
     }
   )
 end)
@@ -658,6 +706,50 @@ test("prompt requires minimal spans for corrections", function()
   assert(content:find("readability, style, structure", 1, true))
 end)
 
+test("prompt requests constrained long-sentence rewrites", function()
+  local prompt = require("ai-proofread.prompt")
+  local content = prompt.build("Long text.", {
+    spelling = true,
+    long_sentence = true,
+  }, {
+    max_words = 30,
+  }, {
+    { text = "The exact code-detected candidate." },
+  })
+
+  assert(content:find("more than 30 words", 1, true))
+  assert(content:find("type rewrite", 1, true))
+  assert(content:find("preserving every meaning", 1, true))
+  assert(content:find("at most 30 words", 1, true))
+  assert(content:find("Do not remove content", 1, true))
+  assert(content:find("The exact code-detected candidate.", 1, true))
+end)
+
+test("sentence detection supplies only deterministic long candidates", function()
+  local sentence = require("ai-proofread.sentence")
+  local first = "Dr. Smith wrote a short sentence."
+  local words = {}
+  for index = 1, 31 do
+    words[index] = "word" .. index
+  end
+  local long = table.concat(words, " ") .. "."
+  local text = first .. " " .. long
+  local map = {}
+  for byte = 1, #text do
+    map[byte] = byte
+  end
+  local candidates = sentence.long_candidates({
+    review_text = text,
+    document_text = text,
+    offset_map = map,
+    protected_spans = {},
+  }, 30)
+
+  equal(#sentence.find(text), 2)
+  equal(#candidates, 1)
+  equal(candidates[1].text, long)
+end)
+
 test("validator rejects removed proofreading categories", function()
   local validator = require("ai-proofread.validate")
   local finding, reason = validator.validate_finding({
@@ -691,6 +783,183 @@ test("validator rejects a correction that changes nothing", function()
   })
   equal(finding, nil)
   equal(reason, "no_change")
+end)
+
+test("validator enforces the configured long-sentence limit", function()
+  local validator = require("ai-proofread.validate")
+  local words = {}
+  for index = 1, 31 do
+    words[index] = "word" .. index
+  end
+  local text = table.concat(words, " ") .. "."
+  local offset_map = {}
+  for byte = 1, #text do
+    offset_map[byte] = byte
+  end
+  local chunk = {
+    review_text = text,
+    document_text = text,
+    offset_map = offset_map,
+  }
+  local finding = {
+    type = "rewrite",
+    category = "long_sentence",
+    original = text,
+    suggestion = "First shorter sentence. Second shorter sentence.",
+    message = "Split this long sentence.",
+  }
+
+  local accepted = validator.validate_finding(finding, chunk, {
+    checks = { long_sentence = true },
+    long_sentence = { max_words = 30 },
+  })
+  assert(accepted)
+
+  local rejected, reason = validator.validate_finding(finding, chunk, {
+    checks = { long_sentence = true },
+    long_sentence = { max_words = 31 },
+  })
+  equal(rejected, nil)
+  equal(reason, "below_long_sentence_limit")
+
+  rejected, reason = validator.validate_finding(finding, chunk, {
+    checks = { long_sentence = false },
+    long_sentence = { max_words = 30 },
+  })
+  equal(rejected, nil)
+  equal(reason, "disabled_category")
+end)
+
+test("long-sentence rewrites supersede contained corrections", function()
+  local validator = require("ai-proofread.validate")
+  local words = { "teh" }
+  for index = 2, 31 do
+    words[index] = "word" .. index
+  end
+  local text = table.concat(words, " ") .. "."
+  local offset_map = {}
+  for byte = 1, #text do
+    offset_map[byte] = byte
+  end
+
+  local result = validator.validate_findings({
+    {
+      type = "correction",
+      category = "spelling",
+      original = "teh",
+      suggestion = "the",
+      message = "Correct the spelling.",
+    },
+    {
+      type = "rewrite",
+      category = "long_sentence",
+      original = text,
+      suggestion = "First shorter sentence. Second shorter sentence.",
+      message = "Split this long sentence.",
+    },
+  }, {
+    review_text = text,
+    document_text = text,
+    offset_map = offset_map,
+  }, {
+    checks = {
+      spelling = true,
+      long_sentence = true,
+    },
+    long_sentence = { max_words = 30 },
+  })
+
+  equal(#result.valid, 1)
+  equal(result.valid[1].category, "long_sentence")
+  equal(#result.rejected, 1)
+  equal(result.rejected[1].reason, "superseded_by_long_sentence")
+end)
+
+test("validator rejects hostile or structurally invalid rewrites", function()
+  local validator = require("ai-proofread.validate")
+  local words = {}
+  for index = 1, 31 do
+    words[index] = "word" .. index
+  end
+  local text = table.concat(words, " ") .. "."
+  local map = {}
+  for byte = 1, #text do
+    map[byte] = byte
+  end
+  local chunk = {
+    review_text = text,
+    document_text = text,
+    offset_map = map,
+    protected_spans = {},
+  }
+  local options = {
+    checks = { long_sentence = true },
+    long_sentence = { max_words = 30 },
+  }
+
+  local finding = {
+    type = "rewrite",
+    category = "long_sentence",
+    original = text,
+    suggestion = "This remains one sentence.",
+    message = "Split it.",
+  }
+  local valid, reason = validator.validate_finding(finding, chunk, options)
+  equal(valid, nil)
+  equal(reason, "invalid_long_sentence_rewrite")
+
+  finding.suggestion = "First sentence.\0Hidden content. Second sentence."
+  valid, reason = validator.validate_finding(finding, chunk, options)
+  equal(valid, nil)
+  equal(reason, "schema_invalid")
+
+  local half = {}
+  for index = 1, 16 do
+    half[index] = "alpha" .. index
+  end
+  local first = table.concat(half, " ") .. "."
+  for index = 1, 16 do
+    half[index] = "beta" .. index
+  end
+  local combined = first .. " " .. table.concat(half, " ") .. "."
+  map = {}
+  for byte = 1, #combined do
+    map[byte] = byte
+  end
+  finding.original = combined
+  finding.suggestion = "First shorter sentence. Second shorter sentence."
+  valid, reason = validator.validate_finding(finding, {
+    review_text = combined,
+    document_text = combined,
+    offset_map = map,
+    protected_spans = {},
+  }, options)
+  equal(valid, nil)
+  equal(reason, "not_long_sentence_candidate")
+end)
+
+test("model response limits reject oversized output", function()
+  local limits = require("ai-proofread.limits")
+  local validator = require("ai-proofread.validate")
+  local findings = {}
+  for index = 1, limits.max_findings + 1 do
+    findings[index] = {}
+  end
+  local document, reason = validator.validate_document({
+    findings = findings,
+  })
+  equal(document, nil)
+  equal(reason, "schema_invalid")
+
+  local oversized = string.rep("x", limits.max_response_bytes + 1)
+  local decoded, err = require("ai-proofread.ollama").decode_response(
+    oversized
+  )
+  equal(decoded, nil)
+  equal(err, "response_too_large")
+  decoded, err = require("ai-proofread.fm").decode_response(oversized)
+  equal(decoded, nil)
+  equal(err, "response_too_large")
 end)
 
 test("applies the current quickfix correction", function()
@@ -728,6 +997,46 @@ test("applies the current quickfix correction", function()
     { "This has the mistake." }
   )
   equal(#vim.fn.getqflist(), 0)
+end)
+
+test("applies a validated long-sentence rewrite", function()
+  local review = require("ai-proofread")
+  local words = {}
+  for index = 1, 31 do
+    words[index] = "word" .. index
+  end
+  local sentence = table.concat(words, " ") .. "."
+  local replacement = "First shorter sentence. Second shorter sentence."
+  local buffer = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_set_current_buf(buffer)
+  vim.bo[buffer].filetype = "text"
+  vim.api.nvim_buf_set_lines(buffer, 0, -1, false, { sentence })
+
+  review.setup({
+    keymaps = { review = false, apply = false },
+    quickfix = { auto_open = false },
+    _transport = function(_, _, callback)
+      callback(nil, {
+        findings = {
+          {
+            type = "rewrite",
+            category = "long_sentence",
+            original = sentence,
+            suggestion = replacement,
+            message = "Split this long sentence.",
+          },
+        },
+      })
+      return { kill = function() end }
+    end,
+  })
+
+  review.review()
+  equal(review.apply(), true)
+  equal(
+    vim.api.nvim_buf_get_lines(buffer, 0, -1, false),
+    { replacement }
+  )
 end)
 
 test("bulk application is one undoable change", function()
@@ -1307,7 +1616,130 @@ test("quickfix opens on the first finding without stealing focus", function()
   local quickfix = vim.fn.getqflist({ id = 0, title = 1, items = 1 })
   equal(quickfix.title, "AI Proofread")
   equal(#quickfix.items, 1)
+
+  local quickfix_window
+  for _, window in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+    local info = vim.fn.getwininfo(window)[1]
+    if info and info.quickfix == 1 then
+      quickfix_window = window
+      break
+    end
+  end
+  assert(quickfix_window)
+  assert(
+    vim.api.nvim_win_get_height(quickfix_window)
+      >= math.ceil(vim.o.lines / 3)
+  )
   vim.cmd("cclose")
+end)
+
+test("quickfix Enter previews the finding and retains list focus", function()
+  local review = require("ai-proofread")
+  local buffer = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_set_current_buf(buffer)
+  vim.bo[buffer].filetype = "text"
+  vim.api.nvim_buf_set_lines(buffer, 0, -1, false, {
+    "First line.",
+    "This has teh mistake.",
+  })
+
+  local source_window = vim.api.nvim_get_current_win()
+  review.setup({
+    keymaps = { review = false },
+    quickfix = {
+      auto_open = true,
+      keep_focus_on_select = true,
+    },
+    _transport = function(_, _, callback)
+      callback(nil, {
+        findings = {
+          {
+            type = "correction",
+            category = "spelling",
+            original = "teh",
+            suggestion = "the",
+            message = "Incorrect spelling.",
+          },
+        },
+      })
+      return { kill = function() end }
+    end,
+  })
+
+  review.review()
+  local quickfix_window
+  for _, window in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+    local info = vim.fn.getwininfo(window)[1]
+    if info and info.quickfix == 1 then
+      quickfix_window = window
+      break
+    end
+  end
+  assert(quickfix_window)
+
+  vim.api.nvim_set_current_win(quickfix_window)
+  vim.api.nvim_feedkeys(vim.keycode("<CR>"), "x", false)
+  equal(vim.api.nvim_get_current_win(), quickfix_window)
+  equal(vim.api.nvim_win_get_cursor(source_window)[1], 2)
+  vim.cmd("cclose")
+end)
+
+test("quickfix setup does not configure an open location list", function()
+  local review = require("ai-proofread")
+  local buffer = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_set_current_buf(buffer)
+  vim.bo[buffer].filetype = "text"
+  vim.api.nvim_buf_set_lines(buffer, 0, -1, false, { "teh text" })
+  local source_window = vim.api.nvim_get_current_win()
+  vim.fn.setloclist(source_window, {
+    { bufnr = buffer, lnum = 1, col = 1, text = "location" },
+  }, "r")
+  vim.cmd("lopen 3")
+  vim.api.nvim_set_current_win(source_window)
+
+  review.setup({
+    keymaps = { review = false },
+    quickfix = { auto_open = true },
+    _transport = function(_, _, callback)
+      callback(nil, {
+        findings = {{
+          type = "correction",
+          category = "spelling",
+          original = "teh",
+          suggestion = "the",
+          message = "Incorrect spelling.",
+        }},
+      })
+      return { kill = function() end }
+    end,
+  })
+  review.review()
+
+  local quickfix_mapped = false
+  local location_mapped = false
+  for _, window in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+    local info = vim.fn.getwininfo(window)[1]
+    if info and info.quickfix == 1 then
+      local mapped = false
+      for _, mapping in ipairs(vim.api.nvim_buf_get_keymap(
+        vim.api.nvim_win_get_buf(window),
+        "n"
+      )) do
+        if mapping.desc == "Preview AI Proofread finding" then
+          mapped = true
+        end
+      end
+      if info.loclist == 1 then
+        location_mapped = mapped
+      else
+        quickfix_mapped = mapped
+      end
+    end
+  end
+  equal(location_mapped, false)
+  equal(quickfix_mapped, true)
+  vim.cmd("cclose")
+  vim.cmd("lclose")
 end)
 
 if failures > 0 then

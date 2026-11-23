@@ -4,8 +4,140 @@
 -- See docs/arch/arch_design.adoc, Quickfix Integration.
 
 local M = {}
+local configured = {
+  height_ratio = 1 / 3,
+  keep_focus_on_select = true,
+}
+local current_id
+
+local function quickfix_window()
+  for _, window in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+    local info = vim.fn.getwininfo(window)[1]
+    if info and info.quickfix == 1 and info.loclist == 0 then
+      return window
+    end
+  end
+end
+
+local function select_current()
+  local quickfix = vim.fn.getqflist({
+    context = 1,
+    idx = 0,
+    items = 1,
+    title = 1,
+  })
+  if quickfix.title ~= "AI Proofread" then
+    vim.api.nvim_feedkeys(vim.keycode("<CR>"), "n", false)
+    return
+  end
+  if quickfix.idx < 1 then
+    return
+  end
+
+  if not configured.keep_focus_on_select then
+    vim.api.nvim_feedkeys(vim.keycode("<CR>"), "n", false)
+    return
+  end
+
+  local item = quickfix.items[quickfix.idx]
+  if not item or item.bufnr < 1 then
+    return
+  end
+  if not vim.api.nvim_buf_is_valid(item.bufnr) then
+    return
+  end
+
+  local target = quickfix.context
+    and quickfix.context.source_window
+    or nil
+  if target and (not vim.api.nvim_win_is_valid(target)
+      or vim.fn.getwininfo(target)[1].quickfix == 1)
+  then
+    target = nil
+  end
+  for _, window in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+    local info = vim.fn.getwininfo(window)[1]
+    if info and info.quickfix == 0 then
+      if vim.api.nvim_win_get_buf(window) == item.bufnr then
+        target = window
+        break
+      end
+    end
+  end
+  if not target then
+    vim.notify(
+      "AI Proofread: source window is no longer available",
+      vim.log.levels.WARN
+    )
+    return
+  end
+
+  vim.api.nvim_win_set_buf(target, item.bufnr)
+  local line_count = vim.api.nvim_buf_line_count(item.bufnr)
+  local line_number = math.min(math.max(item.lnum, 1), line_count)
+  local line = vim.api.nvim_buf_get_lines(
+    item.bufnr,
+    line_number - 1,
+    line_number,
+    true
+  )[1] or ""
+  vim.api.nvim_win_set_cursor(target, {
+    line_number,
+    math.min(math.max(item.col - 1, 0), #line),
+  })
+  vim.api.nvim_win_call(target, function()
+    vim.cmd.normal({ args = { "zz" }, bang = true })
+  end)
+end
+
+local function configure_window(window)
+  if not window or not vim.api.nvim_win_is_valid(window) then
+    return
+  end
+
+  local buffer = vim.api.nvim_win_get_buf(window)
+  vim.keymap.set("n", "<CR>", select_current, {
+    buffer = buffer,
+    desc = "Preview AI Proofread finding",
+    silent = true,
+  })
+end
+
+function M.setup(config)
+  configured = vim.tbl_extend("force", configured, config or {})
+
+  local group = vim.api.nvim_create_augroup(
+    "AIProofreadQuickfix",
+    { clear = true }
+  )
+  vim.api.nvim_create_autocmd("FileType", {
+    group = group,
+    pattern = "qf",
+    callback = function(args)
+      vim.schedule(function()
+        if vim.api.nvim_buf_is_valid(args.buf) and current_id() then
+          configure_window(quickfix_window())
+        end
+      end)
+    end,
+  })
+  vim.api.nvim_create_autocmd("BufWinEnter", {
+    group = group,
+    callback = function(args)
+      if vim.bo[args.buf].filetype == "qf" and current_id() then
+        configure_window(quickfix_window())
+      end
+    end,
+  })
+end
 
 local function entry(buffer, finding)
+  local function display(value)
+    return value
+      :gsub("\r", "\\r")
+      :gsub("\n", "\\n")
+      :gsub("\t", "\\t")
+  end
   return {
     bufnr = buffer,
     lnum = finding.line,
@@ -16,8 +148,8 @@ local function entry(buffer, finding)
     text = string.format(
       "[%s] %s Suggestion: %s",
       finding.category,
-      finding.message,
-      finding.suggestion
+      display(finding.message),
+      display(finding.suggestion)
     ),
     user_data = {
       ai_proofread_id = finding.application_id,
@@ -44,10 +176,11 @@ local function context_for(review)
     chunks_done = review.index,
     chunks_total = #review.chunks,
     review_id = review.id,
+    source_window = review.source_window,
   }
 end
 
-local function current_id()
+current_id = function()
   local list = vim.fn.getqflist({ id = 0, title = 1 })
   if list.title ~= "AI Proofread" then
     return nil
@@ -102,10 +235,19 @@ function M.append(review, findings)
   local count = rewrite(review, id)
   local config = review.config.quickfix
   if config.auto_open and not review.quickfix_opened and count > 0 then
-    local window = vim.api.nvim_get_current_win()
-    vim.cmd(id .. "copen")
-    if vim.api.nvim_win_is_valid(window) then
-      vim.api.nvim_set_current_win(window)
+    local source_window = vim.api.nvim_get_current_win()
+    local height = math.max(
+      1,
+      math.ceil(vim.o.lines * config.height_ratio)
+    )
+    vim.cmd("botright copen " .. height)
+    local window = quickfix_window()
+    if window then
+      vim.api.nvim_win_set_height(window, height)
+      configure_window(window)
+    end
+    if vim.api.nvim_win_is_valid(source_window) then
+      vim.api.nvim_set_current_win(source_window)
     end
     review.quickfix_opened = true
   end

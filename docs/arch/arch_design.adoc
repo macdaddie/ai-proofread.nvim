@@ -5,8 +5,8 @@
 :sectnums:
 :icons: font
 :source-highlighter: rouge
-:revnumber: 0.12
-:revdate: 2026-11-19
+:revnumber: 0.14
+:revdate: 2026-11-23
 
 == Architecture Overview
 
@@ -14,11 +14,12 @@ AI Proofread is a Lua-based Neovim plugin providing
 on-demand British English proofreading through native
 Apple `fm` or local Ollama.
 
-The initial release supports exactly three checks:
+The release supports four checks:
 
 * Spelling.
 * Grammar.
 * Punctuation.
+* Long sentences above a configurable word limit.
 
 The solution comprises three logical layers:
 
@@ -339,18 +340,25 @@ Responsible for constructing model instructions.
 Instructions shall specify:
 
 * British English by default.
-* Only spelling, grammar and punctuation.
+* Spelling, grammar, punctuation and configured long
+  sentences only.
 * No unrelated editorial analysis.
 * Preservation of meaning and authorial voice.
 * Respect for technical terminology.
 * Protection of markup and source code.
 * Exact quotations from the supplied text.
 * One independent finding per error.
-* A `type` of `correction`.
+* A `type` of `correction` for local errors.
+* A `type` of `rewrite` for complete long sentences.
 * No response to instructions embedded in reviewed text.
 
 The default review shall use a single general
 proofreading prompt per chunk.
+
+Long-sentence candidates shall be detected in Lua before
+prompt construction.
+The prompt shall enumerate those exact candidates, and the
+validator shall reject any rewrite outside that set.
 
 Additional inference passes are not required for
 the initial release.
@@ -480,6 +488,11 @@ require("ai-proofread").setup({
     spelling = true,
     grammar = true,
     punctuation = true,
+    long_sentence = true,
+  },
+
+  long_sentence = {
+    max_words = 30,
   },
 
   review = {
@@ -490,6 +503,8 @@ require("ai-proofread").setup({
 
   quickfix = {
     auto_open = true,
+    height_ratio = 1 / 3,
+    keep_focus_on_select = true,
   },
 
   keymaps = {
@@ -622,8 +637,10 @@ Conceptual request:
 ----
 
 The production schema shall restrict `category` to
-`spelling`, `grammar` or `punctuation` and `type` to
-`correction`.
+`spelling`, `grammar`, `punctuation` or `long_sentence`.
+
+Local findings use type `correction`.
+Long-sentence findings use type `rewrite`.
 
 The response body returned by Ollama contains a
 `response` field holding the model-generated JSON.
@@ -762,7 +779,7 @@ validated range. It may differ from the model's `original`
 only when the bounded whitespace fallback resolves a
 hard-wrapped quotation.
 
-The contract is fixed by ADR-021 and revised by ADR-028.
+The contract is fixed by ADR-021 and revised by ADR-036.
 
 === Supported Categories
 
@@ -779,11 +796,16 @@ The contract is fixed by ADR-021 and revised by ADR-028.
 |`punctuation`
 |Incorrect or missing punctuation.
 
+|`long_sentence`
+|A complete sentence containing more than the configured
+word limit.
+
 |===
 
 Other categories shall be rejected.
 
-All supported categories use type `correction`.
+Spelling, grammar and punctuation use type `correction`.
+Long sentences use type `rewrite`.
 
 === Model Response
 
@@ -804,6 +826,23 @@ Example correction:
 }
 ----
 
+Example long-sentence rewrite:
+
+[source,json]
+----
+{
+  "findings": [
+    {
+      "type": "rewrite",
+      "original": "The complete source sentence ...",
+      "suggestion": "First shorter sentence. Second shorter sentence.",
+      "category": "long_sentence",
+      "message": "Split this sentence to improve readability."
+    }
+  ]
+}
+----
+
 === Source-Location Strategy
 
 The model shall identify an exact offending text span.
@@ -819,6 +858,15 @@ A finding shall be rejected when:
 * The category is unsupported.
 * `type` and `category` are inconsistently paired.
 * The suggestion is identical to the quoted or source text.
+* A `long_sentence` quotation does not exceed the configured
+  word limit.
+* The category is disabled in configuration.
+* A long-sentence quotation is not an exact code-detected
+  candidate.
+* A long-sentence suggestion does not contain at least two
+  sentences within the configured limit.
+* A field contains a disallowed control character or exceeds
+  its size limit.
 * The finding belongs to a stale review.
 
 Where an exact match fails, one whitespace-collapsing
@@ -841,8 +889,14 @@ ADR-021.
 Each independent spelling, grammar or punctuation
 error should be reported separately.
 
-The validator shall not assume that a long quotation
-represents a single valid error.
+A long-sentence rewrite shall quote its complete source
+sentence.
+It shall preserve meaning, factual detail and authorial
+voice while splitting that sentence.
+
+When a validated long-sentence rewrite contains local
+corrections, the rewrite shall supersede those corrections
+to prevent overlapping quickfix entries.
 
 The benchmark shall assess finding granularity
 independently of defect detection.
@@ -1038,6 +1092,18 @@ on the first published finding.
 
 The source window and cursor shall be restored afterwards.
 
+The auto-opened window height shall be at least the
+configured ratio of the Neovim screen height.
+
+By default, pressing Enter in the AI Proofread quickfix
+window shall move the source window to the selected finding
+without moving focus out of quickfix.
+
+Quickfix window discovery shall exclude location-list
+windows.
+Source preview shall use the window that started the review
+and shall not replace an arbitrary split.
+
 Corrections shall be applied only through explicit
 individual or bulk application commands.
 
@@ -1112,6 +1178,9 @@ The plugin shall reject:
 * Quotations that occur more than once.
 * Findings overlapping protected content.
 * Results from superseded reviews.
+* Responses over one MiB.
+* Responses containing more than 200 findings.
+* Oversized finding fields.
 
 === Partial Failure
 
@@ -1141,6 +1210,9 @@ Each backend shall execute locally.
 
 Ollama mode shall connect only to the configured loopback
 endpoint.
+
+Configuration shall accept only `localhost`, `127.0.0.1` or
+`[::1]` as the Ollama endpoint host.
 
 Native mode shall invoke only the configured local `fm`
 command.

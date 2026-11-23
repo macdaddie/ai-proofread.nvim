@@ -18,8 +18,12 @@ Ollama model and places source-verified findings in the quickfix list.
 
 Supported filetypes are `text`, `markdown` and `asciidoc`.
 
-Supported categories are spelling, grammar and punctuation. Other
-editorial categories and sentence rewriting are out of scope.
+Supported categories are spelling, grammar, punctuation and long_sentence.
+Long-sentence rewrites split sentences above a configurable word limit
+while preserving meaning, detail and authorial voice. Other editorial
+categories and unrestricted sentence rewriting are out of scope.
+Candidates are detected in Lua before inference. Only exact candidates
+whose resulting sentences meet the configured limit are accepted.
 
 =============================================================================
 2. SETUP                                        *ai-proofread-setup*
@@ -101,7 +105,13 @@ failed_chunks and unreviewable_sections. The complete field is false
 while chunks remain and after a failed or unreviewable chunk.
 
 When quickfix.auto_open is enabled, the quickfix window opens on the first
-published finding. The source window and cursor are restored afterwards.
+published finding at the configured height. The source window and cursor
+are restored afterwards.
+
+Pressing Enter on an AI Proofread quickfix entry moves the source window
+to that location while focus remains in quickfix. Set
+quickfix.keep_focus_on_select to false for Neovim's normal focus-changing
+behaviour.
 
 Any buffer change outside the plugin's apply operation makes the review
 stale. The plugin stops the outstanding request and clears published
@@ -121,7 +131,8 @@ backend~
         "ollama" (default) or "fm".
 
 ollama~
-        url           Local Ollama endpoint. Default:
+        url           Loopback Ollama endpoint. The host must be localhost,
+                      127.0.0.1 or [::1]. Default:
                       "http://127.0.0.1:11434".
         model         Ollama model identifier. Default:
                       "gemma4:12b-it-qat".
@@ -145,9 +156,14 @@ filetypes~
         are not reviewed by default.
 
 checks~
-        Enable spelling, grammar and punctuation independently. Other
-        category names are rejected. Set a check to false to exclude it
-        from the prompt and from validation.
+        Enable spelling, grammar, punctuation and long_sentence
+        independently. Other category names are rejected. Set a check to
+        false to exclude it from the prompt and from validation. All four
+        checks are enabled by default.
+
+long_sentence~
+        max_words     Largest accepted sentence length. A sentence must
+                      exceed this number to produce a finding. Default: 30.
 
 review~
         chunk_size    Byte budget per review chunk. Default: 2500.
@@ -161,6 +177,11 @@ quickfix~
         auto_open     Open the quickfix window on the first published
                       finding, then restore the source window. Default:
                       true.
+        height_ratio  Minimum fraction of the Neovim screen used when
+                      opening quickfix. Default: 1/3.
+        keep_focus_on_select
+                      Keep focus in quickfix when Enter previews a finding
+                      in the source window. Default: true.
 
 keymaps~
         review, review_selection, apply, apply_all and ignore accept a

@@ -4,6 +4,7 @@ local fm = require("ai-proofread.fm")
 local ollama = require("ai-proofread.ollama")
 local prompt = require("ai-proofread.prompt")
 local quickfix = require("ai-proofread.quickfix")
+local sentence = require("ai-proofread.sentence")
 local validator = require("ai-proofread.validate")
 
 -- Streaming review orchestration.
@@ -142,7 +143,20 @@ local function process_next(review)
     return
   end
 
-  local review_prompt = prompt.build(chunk.review_text, review.config.checks)
+  chunk.long_sentence_candidates = {}
+  if review.config.checks.long_sentence then
+    chunk.long_sentence_candidates = sentence.long_candidates(
+      chunk,
+      review.config.long_sentence.max_words
+    )
+  end
+
+  local review_prompt = prompt.build(
+    chunk.review_text,
+    review.config.checks,
+    review.config.long_sentence,
+    chunk.long_sentence_candidates
+  )
   local provider
   local provider_config
   local payload
@@ -195,7 +209,11 @@ local function process_next(review)
       return
     end
 
-    local validation = validator.validate_findings(findings, chunk)
+    local validation = validator.validate_findings(
+      findings,
+      chunk,
+      review.config
+    )
     if #validation.valid > 0 then
       -- IDs come from the published count and never change once visible.
       local first_index = review.published + 1
@@ -243,6 +261,7 @@ function M.start(buffer, config, selection)
   local review = {
     id = sequence,
     buffer = buffer,
+    source_window = vim.api.nvim_get_current_win(),
     changedtick = vim.api.nvim_buf_get_changedtick(buffer),
     config = config,
     chunks = chunks,

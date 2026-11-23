@@ -1,4 +1,5 @@
 local M = {}
+local limits = require("ai-proofread.limits")
 
 local source = debug.getinfo(1, "S").source:sub(2)
 local schema_path = vim.fs.joinpath(
@@ -14,6 +15,9 @@ function M.build_request(prompt, system)
 end
 
 function M.decode_response(body)
+  if type(body) ~= "string" or #body > limits.max_response_bytes then
+    return nil, "response_too_large"
+  end
   local ok, document = pcall(vim.json.decode, body)
   if not ok or type(document) ~= "table" then
     return nil, "invalid_model_json"

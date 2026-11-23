@@ -5,8 +5,8 @@
 :sectnums:
 :icons: font
 :source-highlighter: rouge
-:revnumber: 0.10
-:revdate: 2026-11-18
+:revnumber: 0.12
+:revdate: 2026-11-23
 
 == Executive Summary
 
@@ -19,6 +19,7 @@ Its primary responsibilities are:
 * Spelling.
 * Grammar.
 * Punctuation.
+* Configurable long-sentence detection and splitting.
 * User-triggered application of validated corrections.
 * User-triggered dismissal of unwanted recommendations.
 
@@ -54,7 +55,8 @@ with Neovim.
 == Vision
 
 Provide a local, unobtrusive proofreader that identifies
-spelling, grammar and punctuation errors without
+spelling, grammar, punctuation and configured long
+sentences without
 interfering with the author's writing process.
 
 The author invokes a review, examines the findings and
@@ -81,6 +83,8 @@ a|
 . Use British English by default.
 a|[start=9]
 . Detect spelling, grammar and punctuation errors.
+. Detect sentences above a configured word limit and offer
+  meaning-preserving splits.
 . Return structured findings with replacement text.
 . Present findings through native quickfix.
 . Preserve accurate source locations.
@@ -105,6 +109,9 @@ a|
 * British English spelling checks.
 * Context-sensitive grammatical checks.
 * Punctuation checks.
+* Configurable long-sentence checks.
+* Code-detected long-sentence candidates with validated
+  model rewrites.
 * User-triggered application of one validated correction.
 * User-triggered application of all validated corrections.
 * Filetype-specific protection of non-prose content.
@@ -155,7 +162,8 @@ The initial release shall not include:
 a|
 * General stylistic editing.
 * Document-wide rewriting.
-* Sentence readability or restructuring.
+* Unrestricted sentence readability or restructuring beyond
+  configured long-sentence splitting.
 * General clarity or concision analysis.
 * Ambiguity analysis as an independent review category.
 * Redundancy and repetition analysis as independent checks.
@@ -284,9 +292,9 @@ These commands constitute the implemented command API.
 
 === Findings
 
-Each finding is a localised spelling, grammar or
-punctuation correction with an exact source quotation
-and suggested replacement.
+Each finding is either a localised spelling, grammar or
+punctuation correction, or a whole long-sentence rewrite,
+with an exact source quotation and suggested replacement.
 
 All findings use quickfix severity `W`.
 
@@ -434,8 +442,8 @@ language tools.
 Harper provides continuous language diagnostics.
 
 AI Proofread provides deliberate, context-sensitive
-proofreading and localised spelling, grammar and punctuation
-corrections.
+proofreading, localised spelling, grammar and punctuation
+corrections, and configured long-sentence rewrites.
 
 The plugin shall not require Harper to be installed.
 

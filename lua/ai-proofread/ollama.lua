@@ -1,4 +1,5 @@
 local schema = require("ai-proofread.schema")
+local limits = require("ai-proofread.limits")
 
 local M = {}
 
@@ -38,6 +39,9 @@ function M.build_preload_request(model, keep_alive)
 end
 
 function M.decode_response(body)
+  if type(body) ~= "string" or #body > limits.max_response_bytes then
+    return nil, "response_too_large"
+  end
   local transport, transport_error = decode_json(body)
   if not transport then
     return nil, "invalid_transport_json: " .. tostring(transport_error)
@@ -78,11 +82,13 @@ local function generate_command(config, timeout_ms)
     "--fail-with-body",
     "--max-time",
     tostring(math.ceil(timeout_ms / 1000)),
+    "--max-filesize",
+    tostring(limits.max_response_bytes),
     "--header",
     "Content-Type: application/json",
     "--data-binary",
     "@-",
-    config.url .. "/api/generate",
+    config.url:gsub("/$", "") .. "/api/generate",
   }
 end
 
@@ -182,7 +188,9 @@ function M.loaded_models(config)
     "--silent",
     "--show-error",
     "--fail-with-body",
-    config.url .. "/api/ps",
+    "--max-time",
+    tostring(math.ceil(config.timeout_ms / 1000)),
+    config.url:gsub("/$", "") .. "/api/ps",
   }, { text = true }):wait()
 
   if result.code ~= 0 then
@@ -197,7 +205,9 @@ function M.check(config)
     "--silent",
     "--show-error",
     "--fail-with-body",
-    config.url .. "/api/tags",
+    "--max-time",
+    tostring(math.ceil(config.timeout_ms / 1000)),
+    config.url:gsub("/$", "") .. "/api/tags",
   }, { text = true }):wait()
 
   if result.code ~= 0 then

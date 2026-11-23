@@ -5,8 +5,8 @@
 :sectnums:
 :icons: font
 :source-highlighter: rouge
-:revnumber: 0.9
-:revdate: 2026-11-18
+:revnumber: 0.11
+:revdate: 2026-11-23
 
 == Purpose
 
@@ -141,7 +141,7 @@ Superseded decisions shall not be deleted.
 
 |028
 |Restrict proofreading to three correction categories
-|Accepted
+|Superseded by ADR-036
 
 |029
 |Apply validated corrections on explicit request
@@ -169,6 +169,14 @@ Superseded decisions shall not be deleted.
 
 |035
 |Stream published findings and rebase after explicit apply
+|Accepted
+
+|036
+|Detect long sentences and offer meaning-preserving splits
+|Accepted
+
+|037
+|Harden sentence rewrites, model output and local transport
 |Accepted
 |===
 
@@ -2090,6 +2098,155 @@ decision and has no runtime effect.
 Tests shall cover incremental publication, stable identifiers,
 apply and ignore during review, rebasing after edits, stale
 external changes and cancellation cleanup.
+
+=== ADR-036: Long-Sentence Detection and Rewrites
+
+Status:: Accepted
+Date:: 2026-11-23
+Supersedes:: ADR-028
+Refines:: ADR-016, ADR-020, ADR-021, ADR-029
+
+==== Context
+
+ADR-028 restricted proofreading to spelling, grammar and
+punctuation because general readability and stylistic
+rewrites were too subjective.
+
+Repeated use has identified one narrower requirement:
+sentences over a configured word limit are a recurring
+authoring problem and benefit from an applicable quickfix
+suggestion.
+
+The boundary can be deterministic even though producing a
+useful split requires the selected local model.
+
+Whole-sentence rewrites can overlap local spelling, grammar
+or punctuation corrections.
+
+Publishing both would make bulk application fail its overlap
+preflight and would create competing recommendations.
+
+==== Decision
+
+Add `long_sentence` as a fourth, enabled-by-default check.
+
+Its configured `max_words` shall default to 30.
+A finding qualifies only when the validated source quotation
+contains more than that number of words.
+
+The model shall quote the complete sentence and return a
+`rewrite` finding whose suggestion splits it into shorter
+sentences.
+
+The suggestion shall preserve meaning, factual detail and
+authorial voice.
+It shall not remove content merely to make the result
+shorter.
+
+The validator shall:
+
+. Locate the quoted sentence using the existing exact-source
+  rules.
+. Count words in the validated source slice.
+. Reject a `long_sentence` finding at or below the configured
+  threshold.
+. Reject a rewrite that does not change the validated source
+  slice.
+. Prefer a validated long-sentence rewrite over spelling,
+  grammar or punctuation findings wholly contained within
+  its source range.
+
+The quickfix and application workflows shall treat the
+validated rewrite like another applicable finding.
+
+General readability, ambiguity, redundancy, logic,
+terminology consistency and unrestricted stylistic rewriting
+remain outside scope.
+
+==== Rationale
+
+A deterministic threshold keeps detection predictable and
+configurable.
+
+Limiting the suggestion to a meaning-preserving split
+addresses the observed problem without reopening general
+style editing.
+
+Giving the whole-sentence rewrite precedence avoids
+overlapping quickfix entries and preserves atomic bulk
+application.
+
+==== Consequences
+
+The response schema gains the `long_sentence` category and
+the `rewrite` type.
+
+Configuration gains `checks.long_sentence` and
+`long_sentence.max_words`.
+
+Prompt instructions must distinguish local corrections from
+whole-sentence rewrites.
+
+Tests shall cover threshold enforcement, disabled checks,
+meaning-preserving prompt instructions and overlap
+precedence.
+
+=== ADR-037: Harden Rewrite and Transport Trust Boundaries
+
+Status:: Accepted
+Date:: 2026-11-23
+Refines:: ADR-008, ADR-016, ADR-019, ADR-034, ADR-036
+
+==== Context
+
+ADR-036 validates the word count of a model-supplied
+quotation, but that alone does not prove that the quotation
+is one complete sentence or that the suggestion splits it.
+
+Model responses also require explicit size limits.
+The local-only privacy promise requires enforcement rather
+than documentation alone.
+
+==== Decision
+
+The plugin shall detect long-sentence candidates in code
+before inference.
+The model may rewrite only those exact candidates.
+
+A rewrite shall contain at least two sentences, each within
+the configured word limit.
+Control characters other than ordinary whitespace shall be
+rejected.
+
+Response bytes, finding counts and finding field lengths
+shall have fixed upper bounds before editor state is created.
+
+Ollama endpoints shall use `localhost`, `127.0.0.1` or
+`[::1]`.
+Remote endpoints shall be rejected without an override.
+
+Quickfix presentation shall target the global quickfix
+window explicitly and shall not configure a location-list
+window.
+Source preview shall use the review's originating window
+rather than an arbitrary split.
+
+==== Rationale
+
+These checks convert prompt instructions into enforceable
+boundaries, limit denial-of-service exposure and preserve the
+plugin's local privacy guarantee.
+
+==== Consequences
+
+Sentence detection becomes a shared code module used by
+prompt construction and validation.
+
+Some ambiguous prose and abbreviations may remain unsuitable
+for automatic rewriting and shall be rejected safely.
+
+Tests shall include hostile rewrites, oversized output,
+location-list coexistence and malformed configuration.
 
 == Decision Governance
 

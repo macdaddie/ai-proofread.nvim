@@ -82,9 +82,13 @@ reversible source-byte map. Raw RTF shall not be sent to the model.
 The benchmark begins only after the plugin passes its automated and
 real-backend integration tests.
 
-The corpus shall cover spelling, grammar and punctuation,
-British English, protected markup, repeated quotations and
-clean prose.
+The corpus shall cover spelling, grammar, punctuation and
+long-sentence rewrites, British English, protected markup,
+repeated quotations and clean prose.
+
+Include adversarial rewrite cases, abbreviation-heavy
+sentences, hostile control characters and oversized model
+responses.
 
 Measure precision, recall, false-positive rate, correction accuracy,
 and exact-source accuracy.

@@ -33,6 +33,11 @@ M.default_config = {
     spelling = true,
     grammar = true,
     punctuation = true,
+    long_sentence = true,
+  },
+
+  long_sentence = {
+    max_words = 30,
   },
 
   review = {
@@ -43,6 +48,8 @@ M.default_config = {
 
   quickfix = {
     auto_open = true,
+    height_ratio = 1 / 3,
+    keep_focus_on_select = true,
   },
 
   keymaps = {
@@ -58,7 +65,39 @@ local supported_checks = {
   spelling = true,
   grammar = true,
   punctuation = true,
+  long_sentence = true,
 }
+
+local function is_loopback_url(url)
+  if type(url) ~= "string" then
+    return false
+  end
+  local authority, suffix = url:match("^https?://([^/]+)(.*)$")
+  if not authority or (suffix ~= "" and suffix ~= "/") then
+    return false
+  end
+  authority = authority:lower()
+  local host, port
+  if authority == "[::1]" then
+    host, port = authority, nil
+  elseif authority:match("^%[::1%]:") then
+    host, port = authority:match("^(%[::1%]):(%d+)$")
+  else
+    host = authority:match("^([^:]+)$")
+    if not host then
+      host, port = authority:match("^([^:]+):(%d+)$")
+    end
+  end
+  if not host or (host ~= "localhost" and host ~= "127.0.0.1"
+      and host ~= "[::1]") then
+    return false
+  end
+  if not port then
+    return true
+  end
+  local number = tonumber(port)
+  return number >= 1 and number <= 65535
+end
 
 ---Validate configuration
 --
@@ -77,12 +116,30 @@ function M.validate(config)
     return nil, "backend must be 'ollama' or 'fm'"
   end
 
+  for _, section in ipairs({
+    "ollama",
+    "fm",
+    "filetypes",
+    "checks",
+    "long_sentence",
+    "review",
+    "quickfix",
+    "keymaps",
+  }) do
+    if config[section] ~= nil and type(config[section]) ~= "table" then
+      return nil, section .. " must be a table"
+    end
+  end
+
   if config.ollama then
-    if config.ollama.url and not config.ollama.url:match("^https?://") then
-      return nil, "ollama.url must be a valid HTTP/HTTPS URL"
+    if config.ollama.url and not is_loopback_url(config.ollama.url) then
+      return nil, "ollama.url must use a loopback host"
     end
 
-    if config.ollama.timeout_ms and config.ollama.timeout_ms < 1000 then
+    if config.ollama.timeout_ms
+      and (type(config.ollama.timeout_ms) ~= "number"
+        or config.ollama.timeout_ms < 1000)
+    then
       return nil, "ollama.timeout_ms must be at least 1000ms"
     end
 
@@ -93,7 +150,8 @@ function M.validate(config)
     end
 
     if config.ollama.preload_timeout_ms
-      and config.ollama.preload_timeout_ms < 1000
+      and (type(config.ollama.preload_timeout_ms) ~= "number"
+        or config.ollama.preload_timeout_ms < 1000)
     then
       return nil, "ollama.preload_timeout_ms must be at least 1000ms"
     end
@@ -121,7 +179,10 @@ function M.validate(config)
     then
       return nil, "fm.command must be a non-empty string"
     end
-    if config.fm.timeout_ms and config.fm.timeout_ms < 1000 then
+    if config.fm.timeout_ms
+      and (type(config.fm.timeout_ms) ~= "number"
+        or config.fm.timeout_ms < 1000)
+    then
       return nil, "fm.timeout_ms must be at least 1000ms"
     end
   end
@@ -137,16 +198,48 @@ function M.validate(config)
     end
   end
 
+  if config.long_sentence then
+    local max_words = config.long_sentence.max_words
+    if max_words ~= nil
+      and (type(max_words) ~= "number"
+        or max_words < 1
+        or max_words % 1 ~= 0)
+    then
+      return nil, "long_sentence.max_words must be a positive integer"
+    end
+  end
+
   if config.review then
     local chunk_size = config.review.chunk_size
       or M.default_config.review.chunk_size
     local hard_limit = config.review.hard_limit
       or M.default_config.review.hard_limit
-    if chunk_size < 1 then
+    if type(chunk_size) ~= "number" or chunk_size < 1 then
       return nil, "review.chunk_size must be positive"
     end
-    if hard_limit < chunk_size then
+    if type(hard_limit) ~= "number" or hard_limit < chunk_size then
       return nil, "review.hard_limit must not be smaller than chunk_size"
+    end
+  end
+
+  if config.quickfix then
+    if config.quickfix.auto_open ~= nil
+      and type(config.quickfix.auto_open) ~= "boolean"
+    then
+      return nil, "quickfix.auto_open must be a boolean"
+    end
+    local height_ratio = config.quickfix.height_ratio
+    if height_ratio ~= nil
+      and (type(height_ratio) ~= "number"
+        or height_ratio <= 0
+        or height_ratio > 1)
+    then
+      return nil, "quickfix.height_ratio must be between 0 and 1"
+    end
+    if config.quickfix.keep_focus_on_select ~= nil
+      and type(config.quickfix.keep_focus_on_select) ~= "boolean"
+    then
+      return nil, "quickfix.keep_focus_on_select must be a boolean"
     end
   end
 

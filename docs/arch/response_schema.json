@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft-07/schema#",
-  "$id": "https://ai-proofread.nvim/response/v3",
+  "$id": "https://ai-proofread.nvim/response/v5",
   "title": "AI Proofread Response Schema",
   "description": "Response contract for ai-proofread.nvim findings",
   "type": "object",
@@ -12,33 +12,38 @@
         "properties": {
           "type": {
             "type": "string",
-            "enum": ["correction"]
+            "enum": ["correction", "rewrite"]
           },
           "category": {
             "type": "string",
             "enum": [
               "spelling",
               "grammar",
-              "punctuation"
+              "punctuation",
+              "long_sentence"
             ]
           },
           "original": {
             "type": "string",
-            "minLength": 1
+            "minLength": 1,
+            "maxLength": 12000
           },
           "suggestion": {
             "type": "string",
-            "minLength": 1
+            "minLength": 1,
+            "maxLength": 24000
           },
           "message": {
             "type": "string",
-            "minLength": 1
+            "minLength": 1,
+            "maxLength": 1000
           }
         },
         "required": ["type", "category", "original", "suggestion", "message"],
         "additionalProperties": false
       },
-      "minItems": 0
+      "minItems": 0,
+      "maxItems": 200
     }
   },
   "required": ["findings"],
