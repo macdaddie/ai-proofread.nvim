@@ -5,7 +5,7 @@
 :sectnums:
 :icons: font
 :source-highlighter: rouge
-:revnumber: 0.11
+:revnumber: 0.13
 :revdate: 2026-11-23
 
 == Purpose
@@ -177,6 +177,14 @@ Superseded decisions shall not be deleted.
 
 |037
 |Harden sentence rewrites, model output and local transport
+|Accepted
+
+|038
+|Preserve streaming with bounded rewrite retries
+|Accepted
+
+|039
+|Bound fm chunks and report review progress
 |Accepted
 |===
 
@@ -2247,6 +2255,141 @@ for automatic rewriting and shall be rejected safely.
 
 Tests shall include hostile rewrites, oversized output,
 location-list coexistence and malformed configuration.
+
+=== ADR-038: Preserve Streaming with Bounded Rewrite Retries
+
+Status:: Accepted
+Date:: 2026-11-23
+Refines:: ADR-035, ADR-036, ADR-037
+
+==== Context
+
+Streamed publication depends on each chunk callback reaching
+quickfix before later chunks are submitted.
+
+The first long-sentence implementation enumerated code-detected
+candidates in the general prompt.
+
+Repeated local testing showed that the default model sometimes
+copied a candidate into both `original` and `suggestion`.
+
+Safe validation rejected that rewrite, so no quickfix entry was
+published for the candidate.
+
+A general retry could multiply requests without bound or widen
+the category scope.
+
+==== Decision
+
+The general prompt shall describe the long-sentence category
+without embedding the candidate list.
+
+Deterministic candidates shall remain the only sentences that
+validation accepts for rewrite.
+
+When a candidate's first rewrite is rejected solely as a no-op
+or an invalid bounded split, the controller shall issue at most
+one focused retry for that candidate.
+
+Retries shall use a narrow response contract that permits one
+`rewrite` finding in the `long_sentence` category.
+
+The number of retries per chunk shall be bounded.
+
+Valid findings shall be published before retries start.
+
+The next chunk shall start only after retries finish.
+
+The progress count shall report the number of chunks actually
+processed.
+
+==== Rationale
+
+The focused prompt removes the copying pattern observed with a
+large candidate array without weakening source validation.
+
+Publishing before retry preserves the visible streaming
+behaviour defined by ADR-035.
+
+A bounded retry set limits latency and request cost while
+recovering the common malformed-output case.
+
+==== Consequences
+
+Both Ollama and `fm` gain a second packaged response schema for
+rewrite retries.
+
+Quickfix context reaches `chunks_total` exactly once when the
+review completes.
+
+Tests shall cover focused retry payloads, bounded retry
+selection, unchanged streaming and final progress counts.
+
+=== ADR-039: Bound fm Chunks and Report Review Progress
+
+Status:: Accepted
+Date:: 2026-11-23
+Refines:: ADR-034, ADR-035, ADR-037
+
+==== Context
+
+The `fm` backend was tested with the default 2,500-byte review
+chunk on local prose.
+
+The plugin issued three requests, but the first structured
+request spent roughly 67 seconds before failing with a context
+size error.
+
+A manual unstructured `fm` response completed in a few seconds.
+
+Reduced chunk sizes produced structured responses in
+single-digit seconds, with an 800-byte budget returning the
+first result in about 6.5 seconds.
+
+Quickfix remained empty until the first validated chunk, so a
+slow request looked like an unresponsive plugin.
+
+==== Decision
+
+The `fm` backend shall use a separate `fm.chunk_size`
+configuration value with a default of 800 bytes.
+
+Ollama shall continue to use `review.chunk_size`.
+
+The controller shall select the chunk budget from the active
+backend before preparing review chunks.
+
+The plugin shall emit one in-place Neovim progress message at
+review start.
+
+That message shall refresh on a timer and report the backend,
+chunk position, phase and elapsed time.
+
+Final progress state shall report success, failure or
+cancellation.
+
+The plugin shall expose `require("ai-proofread").status()` for
+statusline integration.
+
+==== Rationale
+
+A smaller structured request fits the effective on-device
+context and avoids the long failure path.
+
+Visible progress distinguishes slow inference from an
+unresponsive command and discourages repeated invocation.
+
+A stable progress message avoids filling Neovim's message
+history during long reviews.
+
+==== Consequences
+
+Configuration validation gains `fm.chunk_size` constraints.
+
+A progress module owns the message lifecycle and timer.
+
+Tests shall cover the backend-specific chunk budget,
+validation, progress updates, final status and the status API.
 
 == Decision Governance
 

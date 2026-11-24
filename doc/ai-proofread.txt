@@ -97,11 +97,29 @@ selected backend and model before reviewing.
 A suggestion that does not differ from the quoted source text is rejected
 and never reaches quickfix.
 
+Long sentences are detected in Lua before inference. A rejected rewrite
+may receive one focused retry with a narrow response schema. Valid
+findings are published before retries start. Retries are capped per
+chunk, and the next chunk starts only after retries finish.
+
+Starting a review updates a single progress message. It shows the backend,
+current chunk, phase and elapsed time, and it refreshes every two seconds.
+The message reports success, partial failure or cancellation when the review
+ends. This makes a slow fm request visibly active.
+
+                                             *ai-proofread-status()*
+require("ai-proofread").status()                      *ai-proofread-status*
+        Return a statusline-ready string for the current buffer. The string
+        contains the backend, current chunk, phase and elapsed time. It
+        returns an empty string when no review is active.
+
 Findings are appended to the AI Proofread quickfix list as each chunk is
 validated. Entries removed by apply or ignore are not restored by later
 chunks. The quickfix title remains "AI Proofread". The quickfix context
 reports complete, chunks_done, chunks_total, review_id, rejected,
-failed_chunks and unreviewable_sections. The complete field is false
+failed_chunks and unreviewable_sections. chunks_done counts processed
+chunks and equals chunks_total when the review finishes. The rejected
+count includes rejected rewrite retries. The complete field is false
 while chunks remain and after a failed or unreviewable chunk.
 
 When quickfix.auto_open is enabled, the quickfix window opens on the first
@@ -150,6 +168,9 @@ fm~
         command       Native command name or path. Default: "fm".
         model         Native model. Default: "system".
         timeout_ms    Request timeout. Default: 30000.
+        chunk_size    Byte budget per fm review chunk. Default: 800.
+                      This is smaller than review.chunk_size because the
+                      on-device model has a smaller effective context.
 
 filetypes~
         Allowlist for text, markdown and asciidoc. Unsupported filetypes
@@ -164,6 +185,8 @@ checks~
 long_sentence~
         max_words     Largest accepted sentence length. A sentence must
                       exceed this number to produce a finding. Default: 30.
+        Only code-detected sentences may be rewritten. A no-op or invalid
+        split receives one focused retry. Retries are capped per chunk.
 
 review~
         chunk_size    Byte budget per review chunk. Default: 2500.
@@ -196,7 +219,12 @@ evaluation.
 Ollama is the default and provides better proofreading quality. The
 native fm backend is faster to start but substantially less capable;
 expect lower recall and more rejected findings. There is no automatic
-fallback between backends.
+fallback between backends. Both backends use general and rewrite-retry
+schemas with the same source validation.
+
+The fm backend uses fm.chunk_size instead of review.chunk_size. Its smaller
+default keeps structured responses inside the effective on-device context.
+Larger fm chunks can take much longer and may fail with a context-size error.
 
 The first use of fm may require accepting Apple's terms through the fm
 command.
@@ -212,6 +240,9 @@ The fm model is managed by macOS.
 
 Run |:AIProofreadHealth| before reviewing. For Ollama it reports the
 models currently held in memory.
+
+The progress message confirms that a review is active before quickfix has
+a finding. Use |:AIProofreadCancel| to stop a running review.
 
 The quickfix title is always "AI Proofread". If context.complete is false
 after the final chunk, inspect context.failed_chunks and

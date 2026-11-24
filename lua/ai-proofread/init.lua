@@ -156,6 +156,12 @@ function M.cancel()
   )
 end
 
+function M.status()
+  return require("ai-proofread.controller").status(
+    vim.api.nvim_get_current_buf()
+  )
+end
+
 function M.health()
   return require("ai-proofread.health").check(current_config)
 end

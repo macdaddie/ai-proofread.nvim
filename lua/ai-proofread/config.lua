@@ -21,6 +21,7 @@ M.default_config = {
     command = "fm",
     model = "system",
     timeout_ms = 30000,
+    chunk_size = 800,
   },
 
   filetypes = {
@@ -184,6 +185,22 @@ function M.validate(config)
         or config.fm.timeout_ms < 1000)
     then
       return nil, "fm.timeout_ms must be at least 1000ms"
+    end
+
+    if config.fm.chunk_size ~= nil then
+      local chunk_size = config.fm.chunk_size
+      if type(chunk_size) ~= "number"
+        or chunk_size < 1
+        or chunk_size % 1 ~= 0
+      then
+        return nil, "fm.chunk_size must be a positive integer"
+      end
+      local hard_limit = config.review
+          and config.review.hard_limit
+        or M.default_config.review.hard_limit
+      if type(hard_limit) == "number" and chunk_size > hard_limit then
+        return nil, "fm.chunk_size must not exceed review.hard_limit"
+      end
     end
   end
 

@@ -11,7 +11,7 @@ local function decode_json(value)
   return decoded
 end
 
-function M.build_request(model, prompt, system, keep_alive)
+function M.build_request(model, prompt, system, keep_alive, format)
   local request = {
     model = model,
     prompt = prompt,
@@ -19,7 +19,7 @@ function M.build_request(model, prompt, system, keep_alive)
     stream = false,
     think = false,
     options = { temperature = 0 },
-    format = schema,
+    format = format or schema,
   }
   if keep_alive ~= nil then
     request.keep_alive = keep_alive

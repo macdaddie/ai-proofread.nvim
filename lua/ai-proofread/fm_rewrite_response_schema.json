@@ -1,0 +1,30 @@
+{
+  "type": "object",
+  "properties": {
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": ["rewrite"]
+          },
+          "category": {
+            "type": "string",
+            "enum": ["long_sentence"]
+          },
+          "original": {"type": "string", "minLength": 1, "maxLength": 12000},
+          "suggestion": {"type": "string", "minLength": 1, "maxLength": 24000},
+          "message": {"type": "string", "minLength": 1, "maxLength": 1000}
+        },
+        "required": ["type", "category", "original", "suggestion", "message"],
+        "additionalProperties": false
+      },
+      "minItems": 1,
+      "maxItems": 1
+    }
+  },
+  "required": ["findings"],
+  "additionalProperties": false
+}

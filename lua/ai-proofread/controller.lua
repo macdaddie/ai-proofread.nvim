@@ -2,8 +2,10 @@ local adapters = require("ai-proofread.adapters")
 local apply = require("ai-proofread.apply")
 local fm = require("ai-proofread.fm")
 local ollama = require("ai-proofread.ollama")
+local progress = require("ai-proofread.progress")
 local prompt = require("ai-proofread.prompt")
 local quickfix = require("ai-proofread.quickfix")
+local schema = require("ai-proofread.schema")
 local sentence = require("ai-proofread.sentence")
 local validator = require("ai-proofread.validate")
 
@@ -34,6 +36,15 @@ local function snapshot_valid(review)
     and vim.api.nvim_buf_get_changedtick(review.buffer) == review.changedtick
 end
 
+-- The on-device fm context is smaller than the default review chunk. It needs
+-- a tighter byte budget to keep structured responses inside that context.
+local function chunk_budget(config)
+  if config.backend == "fm" and config.fm.chunk_size then
+    return config.fm.chunk_size
+  end
+  return config.review.chunk_size
+end
+
 -- Stop the request and remove every artefact published by this review.
 -- Explicit cancellation and stale external edits share this cleanup path.
 local function discard(review, message, level)
@@ -43,6 +54,7 @@ local function discard(review, message, level)
   active[review.buffer] = nil
   apply.reset(review.buffer)
   quickfix.clear(review.quickfix_id)
+  progress.stop(review.buffer, "cancel", "cancelled")
   if message then
     notify(message, level)
   end
@@ -107,9 +119,153 @@ local function finish(review)
   apply.set_listener(review.buffer, review.id, nil)
   quickfix.finish(review)
 
+  local detail = string.format(
+    "%d findings, %d rejected",
+    #review.result.valid_findings,
+    #review.result.rejected_findings
+  )
+  progress.stop(
+    review.buffer,
+    review.result.complete and "success" or "failed",
+    (review.result.complete and "complete: " or "incomplete: ") .. detail
+  )
+
   if not review.result.complete then
     notify("review incomplete; inspect quickfix context", vim.log.levels.WARN)
   end
+end
+
+local function publish(review, findings)
+  if #findings == 0 then
+    return
+  end
+
+  -- IDs come from the published count and never change once visible.
+  local first_index = review.published + 1
+  review.published = review.published + #findings
+  apply.add(review.buffer, review.id, findings, first_index)
+  vim.list_extend(review.result.valid_findings, findings)
+  quickfix.append(review, findings)
+end
+
+local function record_rejections(review, rejected)
+  vim.list_extend(review.result.rejected_findings, rejected)
+end
+
+local function request_for(review, review_prompt, rewrite)
+  if review.config.backend == "fm" then
+    local request_schema = rewrite and fm.rewrite_schema_path() or nil
+    return fm,
+      review.config.fm,
+      fm.build_request(review_prompt, prompt.system, request_schema)
+  end
+
+  local format = rewrite and schema.rewrite() or nil
+  return ollama,
+    review.config.ollama,
+    ollama.build_request(
+      review.config.ollama.model,
+      review_prompt,
+      prompt.system,
+      review.config.ollama.keep_alive,
+      format
+    )
+end
+
+-- A focused retry repairs one code-detected candidate whose first rewrite
+-- was a no-op or failed the bounded split rule. It never broadens the set of
+-- rewritable sentences and never delays publication of other findings.
+local function retry_rewrites(review, chunk, candidates, done)
+  local position = 1
+
+  local function next_request()
+    if not is_current(review) then
+      return
+    end
+    if not snapshot_valid(review) then
+      discard(review, "buffer changed; discarded stale results", vim.log.levels.WARN)
+      return
+    end
+
+    local candidate = candidates[position]
+    if not candidate then
+      done()
+      return
+    end
+    local retry_index = position
+    position = position + 1
+
+    progress.update(
+      review,
+      string.format(
+        "rewrite retry %d/%d",
+        retry_index,
+        #candidates
+      )
+    )
+
+    local retry_prompt = prompt.build_rewrite(
+      candidate.text,
+      review.config.long_sentence.max_words
+    )
+    local provider, provider_config, payload = request_for(
+      review,
+      retry_prompt,
+      true
+    )
+    local send = review.config._transport or provider.request
+
+    local handle = send(provider_config, payload, function(err, document)
+      if not is_current(review) then
+        return
+      end
+      if not snapshot_valid(review) then
+        discard(review, "buffer changed; discarded stale results", vim.log.levels.WARN)
+        return
+      end
+
+      if err then
+        record_rejections(review, {
+          {
+            finding = {
+              category = "long_sentence",
+              original = candidate.text,
+            },
+            reason = validator.RejectionReason.REWRITE_RETRY_FAILED,
+          },
+        })
+        next_request()
+        return
+      end
+
+      local findings, envelope_error = validator.validate_document(document)
+      if not findings then
+        record_rejections(review, {
+          {
+            finding = {
+              category = "long_sentence",
+              original = candidate.text,
+            },
+            reason = envelope_error,
+          },
+        })
+        next_request()
+        return
+      end
+
+      local validation = validator.validate_findings(
+        findings,
+        chunk,
+        review.config
+      )
+      publish(review, validation.valid)
+      record_rejections(review, validation.rejected)
+      next_request()
+    end)
+    review.process = handle
+  end
+
+  next_request()
 end
 
 -- Submit one chunk at a time and publish its result before scheduling the
@@ -120,12 +276,17 @@ local function process_next(review)
     return
   end
 
-  review.index = review.index + 1
-  local chunk = review.chunks[review.index]
+  local next_index = review.index + 1
+  local chunk = review.chunks[next_index]
   if not chunk then
     finish(review)
     return
   end
+  review.index = next_index
+  progress.update(
+    review,
+    string.format("requesting chunk %d/%d", review.index, #review.chunks)
+  )
 
   if not snapshot_valid(review) then
     discard(review, "buffer changed; discarded stale results", vim.log.levels.WARN)
@@ -154,26 +315,13 @@ local function process_next(review)
   local review_prompt = prompt.build(
     chunk.review_text,
     review.config.checks,
-    review.config.long_sentence,
-    chunk.long_sentence_candidates
+    review.config.long_sentence
   )
-  local provider
-  local provider_config
-  local payload
-  if review.config.backend == "fm" then
-    provider = fm
-    provider_config = review.config.fm
-    payload = fm.build_request(review_prompt, prompt.system)
-  else
-    provider = ollama
-    provider_config = review.config.ollama
-    payload = ollama.build_request(
-      review.config.ollama.model,
-      review_prompt,
-      prompt.system,
-      review.config.ollama.keep_alive
-    )
-  end
+  local provider, provider_config, payload = request_for(
+    review,
+    review_prompt,
+    false
+  )
   local send = review.config._transport or provider.request
 
   review.process = send(provider_config, payload, function(err, document)
@@ -214,16 +362,28 @@ local function process_next(review)
       chunk,
       review.config
     )
-    if #validation.valid > 0 then
-      -- IDs come from the published count and never change once visible.
-      local first_index = review.published + 1
-      review.published = review.published + #validation.valid
-      apply.add(review.buffer, review.id, validation.valid, first_index)
-      vim.list_extend(review.result.valid_findings, validation.valid)
-      quickfix.append(review, validation.valid)
+    publish(review, validation.valid)
+
+    local candidates, retryable = validator.retry_candidates(
+      validation.rejected,
+      chunk
+    )
+    local final_rejections = {}
+    for index, rejection in ipairs(validation.rejected) do
+      if not retryable[index] then
+        final_rejections[#final_rejections + 1] = rejection
+      end
     end
-    vim.list_extend(review.result.rejected_findings, validation.rejected)
-    process_next(review)
+    record_rejections(review, final_rejections)
+
+    if #candidates == 0 then
+      process_next(review)
+      return
+    end
+
+    retry_rewrites(review, chunk, candidates, function()
+      process_next(review)
+    end)
   end)
 end
 
@@ -248,7 +408,7 @@ function M.start(buffer, config, selection)
   local chunks, err = adapters.prepare(
     filetype,
     text,
-    config.review.chunk_size,
+    chunk_budget(config),
     config.review.hard_limit,
     selection
   )
@@ -281,8 +441,13 @@ function M.start(buffer, config, selection)
   apply.set_listener(buffer, review.id, function(edits)
     rebase(review, edits)
   end)
+  progress.start(review)
   process_next(review)
   return review.id
+end
+
+function M.status(buffer)
+  return progress.format(buffer)
 end
 
 -- Explicit cancellation uses the same cleanup path as stale detection.

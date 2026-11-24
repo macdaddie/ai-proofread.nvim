@@ -4,4 +4,5 @@ return {
   max_original_bytes = 12000,
   max_suggestion_bytes = 24000,
   max_message_bytes = 1000,
+  max_rewrite_retries_per_chunk = 3,
 }

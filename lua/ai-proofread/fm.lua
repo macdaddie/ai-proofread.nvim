@@ -6,11 +6,20 @@ local schema_path = vim.fs.joinpath(
   vim.fs.dirname(source),
   "fm_response_schema.json"
 )
+local rewrite_schema_path = vim.fs.joinpath(
+  vim.fs.dirname(source),
+  "fm_rewrite_response_schema.json"
+)
 
-function M.build_request(prompt, system)
+function M.rewrite_schema_path()
+  return rewrite_schema_path
+end
+
+function M.build_request(prompt, system, request_schema_path)
   return {
     prompt = prompt,
     system = system,
+    schema_path = request_schema_path,
   }
 end
 
@@ -26,6 +35,7 @@ function M.decode_response(body)
 end
 
 function M.request(config, payload, callback)
+  local request_schema = payload.schema_path or schema_path
   local command = {
     config.command,
     "respond",
@@ -34,7 +44,7 @@ function M.request(config, payload, callback)
     "--no-stream",
     "--greedy",
     "--schema",
-    schema_path,
+    request_schema,
     "--instructions",
     payload.system,
   }

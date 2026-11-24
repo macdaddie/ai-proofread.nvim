@@ -5,7 +5,7 @@
 :sectnums:
 :icons: font
 :source-highlighter: rouge
-:revnumber: 0.14
+:revnumber: 0.16
 :revdate: 2026-11-23
 
 == Architecture Overview
@@ -246,7 +246,25 @@ a|
 * Cancellation.
 * Stale-result detection.
 * Error reporting.
+* Progress reporting.
 |===
+
+=== Progress Reporter
+
+Responsible for reporting review state before quickfix has a
+finding.
+
+The reporter shall use a Neovim progress message with a stable
+message id, so updates replace one message instead of filling
+the message history.
+
+The message shall show the backend, chunk position, current
+phase and elapsed time. It shall refresh on a timer so that a
+long inference request remains visibly active.
+
+The reporter shall mark the final state as success, failure or
+cancellation. It shall also expose a formatted status string
+for statusline integration through `require("ai-proofread").status()`.
 
 === Filetype Adapters
 
@@ -356,12 +374,17 @@ The default review shall use a single general
 proofreading prompt per chunk.
 
 Long-sentence candidates shall be detected in Lua before
-prompt construction.
-The prompt shall enumerate those exact candidates, and the
-validator shall reject any rewrite outside that set.
+inference.
+The general prompt shall describe the category without
+enumerating candidates, and the validator shall reject any
+rewrite outside that set.
 
-Additional inference passes are not required for
-the initial release.
+A focused retry prompt shall be used only for a rejected
+candidate whose first rewrite was a no-op or an invalid
+bounded split.
+It shall quote exactly one candidate between explicit markers.
+Retries shall be bounded per chunk and shall use a response
+schema limited to one long-sentence rewrite.
 
 === Ollama Adapter
 
@@ -398,8 +421,9 @@ The adapter shall invoke the command asynchronously with
 and enforce the configured timeout.
 
 The command shall use the packaged
-`fm_response_schema.json` schema, a non-streaming response
-and greedy generation.
+`fm_response_schema.json` schema for general reviews and
+`fm_rewrite_response_schema.json` for focused rewrite retries.
+It shall use a non-streaming response and greedy generation.
 
 The response is a direct JSON findings document, unlike the
 Ollama transport, which nests a JSON string inside a
@@ -476,6 +500,7 @@ require("ai-proofread").setup({
     command = "fm",
     model = "system",
     timeout_ms = 30000,
+    chunk_size = 800,
   },
 
   filetypes = {
@@ -519,6 +544,13 @@ require("ai-proofread").setup({
 
 The chunk size and hard limit are byte budgets, not model
 token counts.
+
+The `fm` backend uses `fm.chunk_size`; Ollama uses
+`review.chunk_size`. The `fm` default is smaller because
+empirical testing showed that 2,500-byte structured requests
+can exceed the effective on-device context and take roughly a
+minute before failing. An 800-byte budget returned structured
+findings in single-digit seconds in the same test.
 
 The configured model is provisional pending
 proofreading-specific evaluation.
@@ -727,7 +759,15 @@ the same way as Ollama findings.
 
 === Schema Handling
 
-The plugin shall package a versioned JSON Schema.
+The plugin shall package a general JSON Schema and a narrow
+rewrite-retry JSON Schema.
+
+For Ollama, the general schema permits all supported finding
+categories, while the retry schema permits exactly one
+`rewrite` finding in the `long_sentence` category.
+
+For `fm`, equivalent packaged schema files serve the same two
+purposes.
 
 Schema enforcement improves response consistency but
 does not establish that findings are correct.
@@ -1026,6 +1066,10 @@ unreviewable section.
 
 The implementation processes one chunk at a time.
 
+For `fm`, chunks are prepared with `fm.chunk_size` so each
+structured request stays within the effective on-device
+context. Ollama uses `review.chunk_size`.
+
 Concurrency may be introduced later if benchmarks
 demonstrate a benefit.
 
@@ -1035,15 +1079,25 @@ has no runtime effect.
 The default shall be one general proofreading pass
 per chunk.
 
-The controller shall publish findings after each chunk
-completes or fails.
+A bounded focused rewrite retry may follow the general pass
+for that chunk.
+
+The controller shall publish valid findings before starting
+any retries for that chunk.
+
+It shall publish findings after each chunk completes or fails
+and shall start the next chunk only after retries finish.
+
+`chunks_done` shall count only chunks that have been processed,
+so it equals `chunks_total` when the review finishes.
 
 == Quickfix Integration
 
 The plugin shall use Neovim's native quickfix list.
 
-The controller shall create the list when the review begins
-and append each chunk's sorted findings to that list.
+The controller shall create the list when the first batch is
+published, and shall ensure it exists when the review finishes.
+It shall append each chunk's sorted findings to that list.
 
 Illustrative implementation:
 
@@ -1181,6 +1235,7 @@ The plugin shall reject:
 * Responses over one MiB.
 * Responses containing more than 200 findings.
 * Oversized finding fields.
+* Failed or undecodable focused rewrite retries.
 
 === Partial Failure
 

@@ -5,7 +5,7 @@
 :sectnums:
 :icons: font
 :source-highlighter: rouge
-:revnumber: 0.12
+:revnumber: 0.14
 :revdate: 2026-11-23
 
 == Executive Summary
@@ -496,11 +496,16 @@ stop
 * Neovim shall remain responsive during review.
 * Model execution shall be asynchronous.
 * Large documents shall be segmented.
+* The `fm` backend shall use a smaller chunk budget so that
+  structured responses fit the effective on-device context.
 * Findings shall be published as each chunk completes.
+* An active review shall show visible progress before the
+  first finding is published.
 * Review cancellation shall be supported.
 * Excessive concurrent model requests shall be avoided.
-* A general review shall use one inference pass per chunk
-  unless evaluation justifies additional passes.
+* A general review shall use one inference pass per chunk,
+  with a bounded focused retry only for a rejected
+  long-sentence candidate.
 
 === Reliability
 
@@ -509,6 +514,8 @@ stop
 * Results shall be checked against the buffer snapshot.
 * Model unavailability shall produce actionable errors.
 * Partial review failures shall be reported.
+* Completion, failure and cancellation shall be visible in
+  the review progress state.
 * Rejected findings shall be counted and reported.
 * No findings shall be fabricated.
 

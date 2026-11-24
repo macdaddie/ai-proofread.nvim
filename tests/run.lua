@@ -31,6 +31,7 @@ test("public API loads and merges setup options", function()
   equal(type(review.apply), "function")
   equal(type(review.apply_all), "function")
   equal(type(review.ignore), "function")
+  equal(type(review.status), "function")
 
   review.setup({
     ollama = { model = "test-model" },
@@ -101,6 +102,29 @@ test("configuration validates the inference backend", function()
   local valid, err = config.validate({ backend = "cloud" })
   equal(valid, nil)
   equal(err, "backend must be 'ollama' or 'fm'")
+end)
+
+test("configuration validates the fm chunk budget", function()
+  local config = require("ai-proofread.config")
+  local valid, err = config.validate({ fm = { chunk_size = 0 } })
+  equal(valid, nil)
+  equal(err, "fm.chunk_size must be a positive integer")
+
+  valid, err = config.validate({ fm = { chunk_size = 1.5 } })
+  equal(valid, nil)
+  equal(err, "fm.chunk_size must be a positive integer")
+
+  valid, err = config.validate({
+    fm = { chunk_size = 100 },
+    review = { hard_limit = 50 },
+  })
+  equal(valid, nil)
+  equal(err, "fm.chunk_size must not exceed review.hard_limit")
+
+  valid, err = config.validate({ fm = { chunk_size = 800 } })
+  assert(valid)
+  equal(err, nil)
+  equal(valid.fm.chunk_size, 800)
 end)
 
 test("configuration validates long-sentence and quickfix options", function()
@@ -336,6 +360,25 @@ test("Ollama request enforces deterministic structured output", function()
   )
 end)
 
+test("rewrite schema narrows the retry response contract", function()
+  local schema = require("ai-proofread.schema")
+  local general = schema.properties.findings.items.properties
+  local rewrite = schema.rewrite().properties.findings.items.properties
+
+  equal(general.type.enum, { "correction", "rewrite" })
+  equal(general.category.enum, {
+    "spelling",
+    "grammar",
+    "punctuation",
+    "long_sentence",
+  })
+  equal(schema.properties.findings.minItems, 0)
+  equal(rewrite.type.enum, { "rewrite" })
+  equal(rewrite.category.enum, { "long_sentence" })
+  equal(schema.rewrite().properties.findings.minItems, 1)
+  equal(schema.rewrite().properties.findings.maxItems, 1)
+end)
+
 test("Ollama preload request loads without generating text", function()
   local ollama = require("ai-proofread.ollama")
   equal(
@@ -408,6 +451,17 @@ test("fm adapter builds and decodes a structured request", function()
   )
   equal(err, nil)
   equal(document, { findings = {} })
+
+  local rewrite_schema = fm.rewrite_schema_path()
+  assert(rewrite_schema:find("fm_rewrite_response_schema.json", 1, true))
+  equal(
+    fm.build_request("Rewrite this.", "Proofread British English.", rewrite_schema),
+    {
+      prompt = "Rewrite this.",
+      system = "Proofread British English.",
+      schema_path = rewrite_schema,
+    }
+  )
 end)
 
 test("review can use the native fm backend", function()
@@ -439,8 +493,88 @@ test("review can use the native fm backend", function()
 
   review.review()
   equal(received_config.command, "fm")
+  equal(received_config.chunk_size, 800)
   assert(received_payload.prompt:find("teh text", 1, true))
   equal(received_payload.system, require("ai-proofread.prompt").system)
+end)
+
+test("fm chunk budget overrides the general review chunk size", function()
+  local review = require("ai-proofread")
+  local buffer = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_set_current_buf(buffer)
+  vim.bo[buffer].filetype = "text"
+  local paragraph = string.rep("a", 600)
+  vim.api.nvim_buf_set_lines(buffer, 0, -1, false, {
+    paragraph, "", paragraph, "", paragraph,
+  })
+
+  local calls = 0
+  review.setup({
+    backend = "fm",
+    keymaps = { review = false },
+    review = { chunk_size = 2500 },
+    quickfix = { auto_open = false },
+    _transport = function(_, _, callback)
+      calls = calls + 1
+      callback(nil, { findings = {} })
+      return { kill = function() end }
+    end,
+  })
+  review.review()
+  equal(calls, 3)
+end)
+
+test("progress reports an active review in place", function()
+  local progress = require("ai-proofread.progress")
+  local buffer = vim.api.nvim_create_buf(false, true)
+  local captured = {}
+  local original_echo = vim.api.nvim_echo
+
+  vim.api.nvim_echo = function(chunks, history, options)
+    captured[#captured + 1] = {
+      chunks = chunks,
+      history = history,
+      options = options,
+    }
+  end
+
+  local ok, err = pcall(function()
+    local fake = {
+      id = 9999,
+      buffer = buffer,
+      index = 0,
+      config = { backend = "fm" },
+      chunks = { {}, {}, {} },
+    }
+    progress.start(fake)
+    equal(#captured, 1)
+    equal(captured[1].options.kind, "progress")
+    equal(captured[1].options.status, "running")
+    equal(captured[1].options.percent, 0)
+    equal(captured[1].options.title, "AI Proofread")
+    equal(captured[1].options.source, "fm")
+
+    fake.index = 1
+    progress.update(fake, "requesting chunk 1/3")
+    equal(captured[#captured].options.percent, 33)
+    assert(captured[#captured].chunks[1][1]:find("chunk 1/3", 1, true))
+
+    local status = progress.status(buffer)
+    equal(status.backend, "fm")
+    equal(status.done, 1)
+    equal(status.total, 3)
+    equal(status.running, true)
+    assert(progress.format(buffer):find("fm 1/3", 1, true))
+
+    progress.stop(buffer, "success", "complete")
+    equal(captured[#captured].options.status, "success")
+    equal(captured[#captured].options.percent, 33)
+    equal(progress.status(buffer), nil)
+  end)
+
+  progress.stop(buffer, "success", "cleanup")
+  vim.api.nvim_echo = original_echo
+  assert(ok, err)
 end)
 
 test("Ollama response decoder returns the findings envelope", function()
@@ -713,8 +847,6 @@ test("prompt requests constrained long-sentence rewrites", function()
     long_sentence = true,
   }, {
     max_words = 30,
-  }, {
-    { text = "The exact code-detected candidate." },
   })
 
   assert(content:find("more than 30 words", 1, true))
@@ -722,7 +854,18 @@ test("prompt requests constrained long-sentence rewrites", function()
   assert(content:find("preserving every meaning", 1, true))
   assert(content:find("at most 30 words", 1, true))
   assert(content:find("Do not remove content", 1, true))
-  assert(content:find("The exact code-detected candidate.", 1, true))
+  equal(content:find("code-detected candidates", 1, true), nil)
+
+  local focused = prompt.build_rewrite(
+    "The exact code-detected candidate.",
+    30
+  )
+  assert(focused:find("exactly one source sentence", 1, true))
+  assert(focused:find("one rewrite finding", 1, true))
+  assert(focused:find("copy that sentence verbatim", 1, true))
+  assert(focused:find("two or more complete sentences", 1, true))
+  assert(focused:find("at most 30 words", 1, true))
+  assert(focused:find("The exact code-detected candidate.", 1, true))
 end)
 
 test("sentence detection supplies only deterministic long candidates", function()
@@ -936,6 +1079,56 @@ test("validator rejects hostile or structurally invalid rewrites", function()
   }, options)
   equal(valid, nil)
   equal(reason, "not_long_sentence_candidate")
+end)
+
+test("validator selects bounded deterministic rewrite retries", function()
+  local sentence = require("ai-proofread.sentence")
+  local limits = require("ai-proofread.limits")
+  local validator = require("ai-proofread.validate")
+  local expected = {}
+  local rejected_findings = {}
+
+  for index = 1, limits.max_rewrite_retries_per_chunk + 1 do
+    local words = { "prefix" .. index }
+    for word = 2, 31 do
+      words[word] = "word" .. word
+    end
+    local text = table.concat(words, " ") .. "."
+    expected[index] = text
+    rejected_findings[index] = {
+      finding = {
+        type = "rewrite",
+        category = "long_sentence",
+        original = text,
+        suggestion = text,
+        message = "Split this long sentence.",
+      },
+      reason = validator.RejectionReason.NO_CHANGE,
+    }
+  end
+
+  local text = table.concat(expected, " ")
+  local map = {}
+  for byte = 1, #text do
+    map[byte] = byte
+  end
+  local chunk = {
+    review_text = text,
+    document_text = text,
+    offset_map = map,
+    protected_spans = {},
+  }
+  chunk.long_sentence_candidates = sentence.long_candidates(chunk, 30)
+  equal(#chunk.long_sentence_candidates, #expected)
+
+  local candidates, retryable = validator.retry_candidates(
+    rejected_findings,
+    chunk
+  )
+  equal(#candidates, limits.max_rewrite_retries_per_chunk)
+  equal(retryable[1], true)
+  equal(retryable[limits.max_rewrite_retries_per_chunk], true)
+  equal(retryable[limits.max_rewrite_retries_per_chunk + 1], nil)
 end)
 
 test("model response limits reject oversized output", function()
@@ -1371,8 +1564,98 @@ test("quickfix receives findings before the final chunk completes", function()
   quickfix = vim.fn.getqflist({ items = 1, context = 1 })
   equal(#quickfix.items, 2)
   equal(quickfix.context.complete, true)
+  equal(quickfix.context.chunks_done, 2)
   equal(quickfix.items[1].user_data.ai_proofread_id, first_id)
   assert(quickfix.items[2].user_data.ai_proofread_id ~= first_id)
+end)
+
+test("rewrite retry publishes before later chunks and keeps streaming", function()
+  local review = require("ai-proofread")
+  local words = { "prefix" }
+  for word = 2, 31 do
+    words[word] = "word" .. word
+  end
+  local long_sentence = table.concat(words, " ") .. "."
+  local replacement = "First shorter sentence. Second shorter sentence."
+  local buffer = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_set_current_buf(buffer)
+  vim.bo[buffer].filetype = "text"
+  vim.api.nvim_buf_set_lines(buffer, 0, -1, false, {
+    long_sentence,
+    "",
+    "teh second.",
+  })
+
+  local callbacks = {}
+  local payloads = {}
+  review.setup({
+    keymaps = { review = false },
+    review = { chunk_size = 120, hard_limit = 12000 },
+    quickfix = { auto_open = false },
+    _transport = function(_, payload, callback)
+      payloads[#payloads + 1] = payload
+      callbacks[#callbacks + 1] = callback
+      return { kill = function() end }
+    end,
+  })
+
+  review.review()
+  equal(#callbacks, 1)
+
+  callbacks[1](nil, {
+    findings = {
+      {
+        type = "rewrite",
+        category = "long_sentence",
+        original = long_sentence,
+        suggestion = long_sentence,
+        message = "Split this long sentence.",
+      },
+    },
+  })
+  equal(#callbacks, 2)
+  assert(payloads[2].prompt:find("<<<SENTENCE>>>", 1, true))
+  equal(
+    payloads[2].format.properties.findings.items.properties.type.enum,
+    { "rewrite" }
+  )
+  equal(
+    payloads[2].format.properties.findings.items.properties.category.enum,
+    { "long_sentence" }
+  )
+
+  callbacks[2](nil, {
+    findings = {
+      {
+        type = "rewrite",
+        category = "long_sentence",
+        original = long_sentence,
+        suggestion = replacement,
+        message = "Split this long sentence.",
+      },
+    },
+  })
+  equal(#callbacks, 3)
+  local mid_review = vim.fn.getqflist({ items = 1, context = 1 })
+  equal(#mid_review.items, 1)
+  equal(mid_review.context.complete, false)
+  equal(mid_review.context.chunks_done, 1)
+
+  callbacks[3](nil, {
+    findings = {
+      {
+        type = "correction",
+        category = "spelling",
+        original = "teh",
+        suggestion = "the",
+        message = "Incorrect spelling.",
+      },
+    },
+  })
+  local final_review = vim.fn.getqflist({ items = 1, context = 1 })
+  equal(#final_review.items, 2)
+  equal(final_review.context.complete, true)
+  equal(final_review.context.chunks_done, 2)
 end)
 
 test("apply during review rebases later findings and keeps review running", function()

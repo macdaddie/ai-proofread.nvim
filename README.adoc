@@ -108,6 +108,7 @@ require("ai-proofread").setup({
     command = "fm",
     model = "system",
     timeout_ms = 30000,
+    chunk_size = 800,
   },
   filetypes = {
     asciidoc = true,
@@ -153,6 +154,18 @@ length.
 A sentence must exceed that number to produce a
 `long_sentence` finding.
 
+Long sentences are detected in Lua before inference.
+Only those exact sentences may be rewritten.
+If the first rewrite is a no-op or does not produce a valid
+bounded split, the plugin makes one focused retry for that
+sentence.
+Retries are capped per chunk.
+
+The `fm` backend uses `fm.chunk_size` instead of
+`review.chunk_size`. The default of 800 bytes keeps structured
+requests inside the smaller on-device context. Ollama
+continues to use `review.chunk_size`.
+
 `quickfix.height_ratio` controls the minimum height used when
 the plugin opens quickfix.
 With `quickfix.keep_focus_on_select = true`, pressing Enter
@@ -186,8 +199,9 @@ The `fm` backend needs no Ollama installation or model
 download on a supported, up-to-date Mac.
 It is faster to start but substantially less capable, so
 expect lower recall and more rejected findings.
-Both backends use the same deterministic schema and source
-validation before findings reach quickfix.
+Both backends use general and rewrite-retry schemas with the
+same deterministic source validation before findings reach
+quickfix.
 
 The first use of `fm` may require accepting Apple's terms
 through the `fm` command.
@@ -220,6 +234,24 @@ The former `foundation-review` Lua module and
 `FoundationReview*` commands remain as deprecated
 compatibility aliases.
 
+== Progress Indication
+
+Starting a review updates a single Neovim progress message.
+It shows the backend, current chunk, phase and elapsed time.
+The message updates in place every two seconds, so a slow
+`fm` request remains visibly active.
+
+The same state is available for a statusline:
+
+[source,lua]
+----
+require("ai-proofread").status()
+----
+
+It returns an empty string when no review is active.
+Use `:AIProofreadCancel` if a running review is no longer
+needed.
+
 == Review and Apply Corrections
 
 . Open a supported `text`, `markdown` or `asciidoc` buffer.
@@ -229,6 +261,7 @@ compatibility aliases.
   or linewise and press `<leader>ar`.
   `:AIProofreadSelection` reviews the most recent visual
   selection.
+. The progress message shows that the review is running.
 . Findings appear in the AI Proofread quickfix list as each
   chunk completes.
 . Navigate published findings with `:cnext`, `:cprevious` or
@@ -254,6 +287,9 @@ Starting another review therefore replaces the corrections
 available for application.
 
 Each validated chunk is appended to the current list.
+Valid findings are published before any rewrite retry starts.
+Retries do not delay findings that were already accepted, and
+the next chunk starts only after retries finish.
 Findings already removed by apply or ignore are not restored
 as later chunks arrive.
 The quickfix title remains `AI Proofread`.
@@ -261,6 +297,9 @@ The quickfix title remains `AI Proofread`.
 The quickfix context reports `complete`, `chunks_done`,
 `chunks_total`, `review_id`, `rejected`, `failed_chunks` and
 `unreviewable_sections`.
+`chunks_done` counts processed chunks and reaches
+`chunks_total` when the review finishes.
+The `rejected` count includes rejected rewrite retries.
 The `complete` flag is false while any chunk is outstanding.
 A review that finishes with a failed or unreviewable chunk
 also leaves it false.

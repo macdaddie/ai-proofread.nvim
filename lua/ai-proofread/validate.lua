@@ -18,6 +18,7 @@ M.RejectionReason = {
   SUPERSEDED_BY_LONG_SENTENCE = "superseded_by_long_sentence",
   NOT_LONG_SENTENCE_CANDIDATE = "not_long_sentence_candidate",
   INVALID_LONG_SENTENCE_REWRITE = "invalid_long_sentence_rewrite",
+  REWRITE_RETRY_FAILED = "rewrite_retry_failed",
 }
 
 local categories = {
@@ -188,6 +189,68 @@ function M.validate_finding(finding, chunk, options)
     suggestion = finding.suggestion,
     message = finding.message,
   }
+end
+
+local retryable_reasons = {
+  [M.RejectionReason.NO_CHANGE] = true,
+  [M.RejectionReason.INVALID_LONG_SENTENCE_REWRITE] = true,
+}
+
+local function candidate_for_finding(finding, chunk)
+  if type(finding) ~= "table" or type(finding.original) ~= "string" then
+    return nil
+  end
+
+  local match = locator.find(chunk.review_text, finding.original)
+  if match.status ~= "exact" then
+    return nil
+  end
+
+  for _, candidate in ipairs(chunk.long_sentence_candidates or {}) do
+    if candidate.start_byte == match.start_byte
+      and candidate.end_byte == match.end_byte
+    then
+      return candidate
+    end
+  end
+end
+
+-- Return deterministic candidates whose first rewrite attempt was rejected
+-- for a reason that a bounded focused retry can plausibly repair.
+function M.retry_candidates(rejected, chunk)
+  local selected = {}
+  local seen = {}
+  for index, rejection in ipairs(rejected or {}) do
+    local finding = rejection.finding
+    if finding and finding.category == "long_sentence"
+      and retryable_reasons[rejection.reason]
+    then
+      local candidate = candidate_for_finding(finding, chunk)
+      if candidate then
+        local key = candidate.source_start_byte .. ":"
+          .. candidate.source_end_byte
+        if not seen[key] then
+          seen[key] = true
+          selected[#selected + 1] = {
+            candidate = candidate,
+            rejection_index = index,
+          }
+        end
+      end
+    end
+  end
+
+  while #selected > limits.max_rewrite_retries_per_chunk do
+    table.remove(selected)
+  end
+
+  local candidates = {}
+  local retryable = {}
+  for _, entry in ipairs(selected) do
+    candidates[#candidates + 1] = entry.candidate
+    retryable[entry.rejection_index] = true
+  end
+  return candidates, retryable
 end
 
 function M.validate_findings(findings, chunk, options)
