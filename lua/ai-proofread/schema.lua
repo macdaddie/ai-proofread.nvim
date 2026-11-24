@@ -53,12 +53,16 @@ local function response_schema(type_values, category_values, min_items, max_item
   }
 end
 
-local M = response_schema(
-  { "correction", "rewrite" },
-  { "spelling", "grammar", "punctuation", "long_sentence" },
-  0,
-  limits.max_findings
-)
+local M = {}
+
+function M.general()
+  return response_schema(
+    { "correction", "rewrite" },
+    { "spelling", "grammar", "punctuation", "long_sentence" },
+    0,
+    limits.max_findings
+  )
+end
 
 function M.rewrite()
   return response_schema({ "rewrite" }, { "long_sentence" }, 1, 1)

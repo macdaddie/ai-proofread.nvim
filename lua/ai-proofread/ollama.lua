@@ -19,7 +19,7 @@ function M.build_request(model, prompt, system, keep_alive, format)
     stream = false,
     think = false,
     options = { temperature = 0 },
-    format = format or schema,
+    format = format or schema.general(),
   }
   if keep_alive ~= nil then
     request.keep_alive = keep_alive

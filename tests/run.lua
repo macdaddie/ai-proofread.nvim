@@ -358,11 +358,15 @@ test("Ollama request enforces deterministic structured output", function()
       "long_sentence",
     }
   )
+  equal(
+    vim.json.decode(vim.json.encode(request)).format,
+    request.format
+  )
 end)
 
 test("rewrite schema narrows the retry response contract", function()
   local schema = require("ai-proofread.schema")
-  local general = schema.properties.findings.items.properties
+  local general = schema.general().properties.findings.items.properties
   local rewrite = schema.rewrite().properties.findings.items.properties
 
   equal(general.type.enum, { "correction", "rewrite" })
@@ -372,7 +376,7 @@ test("rewrite schema narrows the retry response contract", function()
     "punctuation",
     "long_sentence",
   })
-  equal(schema.properties.findings.minItems, 0)
+  equal(schema.general().properties.findings.minItems, 0)
   equal(rewrite.type.enum, { "rewrite" })
   equal(rewrite.category.enum, { "long_sentence" })
   equal(schema.rewrite().properties.findings.minItems, 1)
