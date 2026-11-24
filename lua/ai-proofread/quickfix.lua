@@ -19,8 +19,29 @@ local function quickfix_window()
   end
 end
 
+-- Moving the quickfix cursor does not update getqflist().idx until the
+-- built-in Enter action runs. Keep it in sync for previews and corrections.
+function M.selected_index(quickfix)
+  if quickfix.title ~= "AI Proofread" then
+    return quickfix.idx
+  end
+  local info = vim.fn.getwininfo(vim.api.nvim_get_current_win())[1]
+  if not info or info.quickfix ~= 1 or info.loclist ~= 0 then
+    return quickfix.idx
+  end
+  local index = vim.api.nvim_win_get_cursor(0)[1]
+  if index < 1 or index > #quickfix.items then
+    return quickfix.idx
+  end
+  if index ~= quickfix.idx then
+    vim.fn.setqflist({}, "a", { id = quickfix.id, idx = index })
+  end
+  return index
+end
+
 local function select_current()
   local quickfix = vim.fn.getqflist({
+    id = 0,
     context = 1,
     idx = 0,
     items = 1,
@@ -30,7 +51,8 @@ local function select_current()
     vim.api.nvim_feedkeys(vim.keycode("<CR>"), "n", false)
     return
   end
-  if quickfix.idx < 1 then
+  local index = M.selected_index(quickfix)
+  if index < 1 then
     return
   end
 
@@ -39,7 +61,7 @@ local function select_current()
     return
   end
 
-  local item = quickfix.items[quickfix.idx]
+  local item = quickfix.items[index]
   if not item or item.bufnr < 1 then
     return
   end
@@ -127,6 +149,22 @@ function M.setup(config)
       if vim.bo[args.buf].filetype == "qf" and current_id() then
         configure_window(quickfix_window())
       end
+    end,
+  })
+  vim.api.nvim_create_autocmd("WinLeave", {
+    group = group,
+    callback = function()
+      local info = vim.fn.getwininfo(vim.api.nvim_get_current_win())[1]
+      if not info or info.quickfix ~= 1 or info.loclist ~= 0 then
+        return
+      end
+      local quickfix = vim.fn.getqflist({
+        id = 0,
+        idx = 0,
+        items = 1,
+        title = 1,
+      })
+      M.selected_index(quickfix)
     end,
   })
 end

@@ -1967,6 +1967,121 @@ test("quickfix Enter previews the finding and retains list focus", function()
   vim.cmd("cclose")
 end)
 
+test("quickfix selection previews and applies the highlighted finding", function()
+  local review = require("ai-proofread")
+  local buffer = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_set_current_buf(buffer)
+  vim.bo[buffer].filetype = "text"
+  vim.api.nvim_buf_set_lines(buffer, 0, -1, false, {
+    "Teh first line.",
+    "A second line with teh error.",
+  })
+  local source_window = vim.api.nvim_get_current_win()
+
+  review.setup({
+    keymaps = { review = false, apply = false, apply_all = false },
+    quickfix = { auto_open = true, keep_focus_on_select = true },
+    _transport = function(_, _, callback)
+      callback(nil, {
+        findings = {
+          {
+            type = "correction",
+            category = "spelling",
+            original = "Teh",
+            suggestion = "The",
+            message = "First spelling.",
+          },
+          {
+            type = "correction",
+            category = "spelling",
+            original = "teh",
+            suggestion = "the",
+            message = "Second spelling.",
+          },
+        },
+      })
+      return { kill = function() end }
+    end,
+  })
+
+  review.review()
+  local quickfix_window
+  for _, window in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+    local info = vim.fn.getwininfo(window)[1]
+    if info and info.quickfix == 1 and info.loclist == 0 then
+      quickfix_window = window
+      break
+    end
+  end
+  assert(quickfix_window)
+  equal(#vim.fn.getqflist(), 2)
+  vim.api.nvim_set_current_win(quickfix_window)
+  vim.api.nvim_win_set_cursor(quickfix_window, { 2, 0 })
+  vim.api.nvim_set_current_win(source_window)
+  equal(vim.fn.getqflist({ idx = 0 }).idx, 2)
+  vim.api.nvim_set_current_win(quickfix_window)
+  vim.api.nvim_feedkeys(vim.keycode("<CR>"), "x", false)
+  equal(vim.api.nvim_get_current_win(), quickfix_window)
+  equal(vim.api.nvim_win_get_cursor(source_window)[1], 2)
+  equal(vim.fn.getqflist({ idx = 0 }).idx, 2)
+
+  vim.api.nvim_set_current_win(source_window)
+  equal(review.apply(), true)
+  equal(vim.api.nvim_buf_get_lines(buffer, 0, -1, false), {
+    "Teh first line.",
+    "A second line with the error.",
+  })
+  local remaining = vim.fn.getqflist({ items = 1, idx = 0 })
+  equal(#remaining.items, 1)
+  assert(remaining.items[1].text:find("First spelling.", 1, true))
+  vim.cmd("cclose")
+end)
+
+test("apply from quickfix uses the highlighted row without Enter", function()
+  local review = require("ai-proofread")
+  local buffer = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_set_current_buf(buffer)
+  vim.bo[buffer].filetype = "text"
+  vim.api.nvim_buf_set_lines(buffer, 0, -1, false, {
+    "Teh first line.",
+    "A second line with teh error.",
+  })
+  review.setup({
+    keymaps = { review = false, apply = false, apply_all = false },
+    quickfix = { auto_open = true },
+    _transport = function(_, _, callback)
+      callback(nil, {
+        findings = {
+          {
+            type = "correction",
+            category = "spelling",
+            original = "Teh",
+            suggestion = "The",
+            message = "First spelling.",
+          },
+          {
+            type = "correction",
+            category = "spelling",
+            original = "teh",
+            suggestion = "the",
+            message = "Second spelling.",
+          },
+        },
+      })
+      return { kill = function() end }
+    end,
+  })
+  review.review()
+  vim.cmd("copen")
+  vim.api.nvim_win_set_cursor(0, { 2, 0 })
+  equal(review.apply(), true)
+  equal(vim.api.nvim_buf_get_lines(buffer, 0, -1, false), {
+    "Teh first line.",
+    "A second line with the error.",
+  })
+  vim.cmd("cclose")
+end)
+
 test("quickfix setup does not configure an open location list", function()
   local review = require("ai-proofread")
   local buffer = vim.api.nvim_create_buf(false, true)

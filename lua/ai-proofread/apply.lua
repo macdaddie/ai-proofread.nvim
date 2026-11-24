@@ -133,8 +133,14 @@ local function edit(buffer, range, replacement, join)
 end
 
 local function state_for_quickfix()
-  local quickfix = vim.fn.getqflist({ idx = 0, items = 1 })
-  local item = quickfix.items[quickfix.idx]
+  local quickfix = vim.fn.getqflist({
+    id = 0,
+    idx = 0,
+    items = 1,
+    title = 1,
+  })
+  local index = require("ai-proofread.quickfix").selected_index(quickfix)
+  local item = quickfix.items[index]
   if not item then
     return nil, nil, "no current AI Proofread finding"
   end
