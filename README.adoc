@@ -273,7 +273,8 @@ needed.
 . Apply the current quickfix correction with
   `:AIProofreadApply` or `<leader>aa`.
 . To apply several entries, select their quickfix rows in
-  Visual Line mode (`V`), then type `:AIProofreadApply`.
+  Visual Line mode (`V`), then type `:AIProofreadApply`
+  or press `<leader>aa` while still in Visual mode.
   Neovim supplies the selected range automatically.
 . Ignore the current recommendation with
   `:AIProofreadIgnore` or `<leader>ai`.

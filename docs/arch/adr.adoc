@@ -5,7 +5,7 @@
 :sectnums:
 :icons: font
 :source-highlighter: rouge
-:revnumber: 0.14
+:revnumber: 0.15
 :revdate: 2026-11-25
 
 == Purpose
@@ -2415,6 +2415,8 @@ An explicit range on `:AIProofreadApply` shall identify the
 selected rows in the AI Proofread quickfix window.
 Visual Line selection followed by the command shall pass
 that range through Neovim's standard Ex command behaviour.
+The configured apply keymap shall also invoke that command
+in Visual mode in the AI Proofread quickfix window.
 
 The command shall resolve each selected row by its immutable
 finding identifier and reject unrelated lists, location

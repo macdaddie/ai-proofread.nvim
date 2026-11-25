@@ -5,7 +5,7 @@
 :sectnums:
 :icons: font
 :source-highlighter: rouge
-:revnumber: 0.17
+:revnumber: 0.18
 :revdate: 2026-11-25
 
 == Architecture Overview
@@ -1188,6 +1188,8 @@ Bulk application shall:
 
 An explicit range on `:AIProofreadApply` shall refer only
 to rows in the active AI Proofread quickfix window.
+The configured apply keymap shall also work in Visual mode
+in that quickfix window, passing the selected Ex range.
 The command shall reject source-buffer and location-list
 ranges without changing the document.
 Selected rows shall resolve by immutable finding identifier

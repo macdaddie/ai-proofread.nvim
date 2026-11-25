@@ -78,8 +78,9 @@ selected backend and model before reviewing.
         continues. A successful correction is removed from quickfix and
         the next outstanding entry is selected.
         To apply several entries, select their quickfix rows with Visual
-        Line mode (V), then type :AIProofreadApply. Neovim supplies the
-        selected range. Only those entries are applied, in one undo step,
+        Line mode (V), then type :AIProofreadApply or press <leader>aa
+        while still in Visual mode. Neovim supplies the selected range.
+        Only those entries are applied, in one undo step,
         after the same stale and overlap checks as :AIProofreadApplyAll.
         Ranges are accepted only from the AI Proofread quickfix window,
         not from source-buffer lines.

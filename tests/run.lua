@@ -1320,7 +1320,7 @@ test("visual quickfix range applies only the selected corrections", function()
   end
 
   review.setup({
-    keymaps = { review = false, apply = false, apply_all = false },
+    keymaps = { review = false, apply = "ga", apply_all = false },
     quickfix = { auto_open = true },
     _transport = function(_, _, callback)
       callback(nil, { findings = findings })
@@ -1362,6 +1362,20 @@ test("visual quickfix range applies only the selected corrections", function()
     "Teh second.",
     "Teh third.",
     "Teh fourth.",
+    "Teh fifth.",
+    "Teh sixth.",
+  })
+  review.review()
+  vim.api.nvim_set_current_win(quickfix_window)
+  local mapping = vim.fn.maparg("ga", "x", false, true)
+  equal(mapping.desc, "Apply selected AI Proofread findings")
+  vim.api.nvim_win_set_cursor(quickfix_window, { 2, 0 })
+  vim.api.nvim_feedkeys("Vjjga", "x", false)
+  equal(vim.api.nvim_buf_get_lines(buffer, 0, -1, false), {
+    "Teh first.",
+    "The second.",
+    "The third.",
+    "The fourth.",
     "Teh fifth.",
     "Teh sixth.",
   })

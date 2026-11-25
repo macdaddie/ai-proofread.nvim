@@ -73,7 +73,10 @@ function M.setup(options)
   end
 
   current_config = config_module.merge(options)
-  require("ai-proofread.quickfix").setup(current_config.quickfix)
+  require("ai-proofread.quickfix").setup(
+    current_config.quickfix,
+    current_config.keymaps.apply
+  )
 
   local mappings = {
     review = {

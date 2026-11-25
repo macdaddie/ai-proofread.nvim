@@ -8,6 +8,7 @@ local configured = {
   height_ratio = 1 / 3,
   keep_focus_on_select = true,
 }
+local visual_apply_mapping
 local current_id
 
 local function quickfix_window()
@@ -123,10 +124,20 @@ local function configure_window(window)
     desc = "Preview AI Proofread finding",
     silent = true,
   })
+  if type(visual_apply_mapping) == "string"
+    and visual_apply_mapping ~= ""
+  then
+    vim.keymap.set("x", visual_apply_mapping, ":AIProofreadApply<CR>", {
+      buffer = buffer,
+      desc = "Apply selected AI Proofread findings",
+      silent = true,
+    })
+  end
 end
 
-function M.setup(config)
+function M.setup(config, apply_mapping)
   configured = vim.tbl_extend("force", configured, config or {})
+  visual_apply_mapping = apply_mapping
 
   local group = vim.api.nvim_create_augroup(
     "AIProofreadQuickfix",
