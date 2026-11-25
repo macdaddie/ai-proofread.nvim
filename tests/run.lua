@@ -1288,6 +1288,141 @@ test("bulk application is one undoable change", function()
   )
 end)
 
+test("visual quickfix range applies only the selected corrections", function()
+  local review = require("ai-proofread")
+  local buffer = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_set_current_buf(buffer)
+  vim.bo[buffer].filetype = "text"
+  vim.api.nvim_buf_set_lines(buffer, 0, -1, false, {
+    "Teh first.",
+    "Teh second.",
+    "Teh third.",
+    "Teh fourth.",
+    "Teh fifth.",
+    "Teh sixth.",
+  })
+  local undo_levels = vim.bo[buffer].undolevels
+  vim.bo[buffer].undolevels = -1
+  vim.bo[buffer].undolevels = undo_levels
+  local source_window = vim.api.nvim_get_current_win()
+  local findings = {}
+  for index, original in ipairs({
+    "Teh first.", "Teh second.", "Teh third.",
+    "Teh fourth.", "Teh fifth.", "Teh sixth.",
+  }) do
+    findings[index] = {
+      type = "correction",
+      category = "spelling",
+      original = original,
+      suggestion = original:gsub("Teh", "The"),
+      message = "Incorrect spelling.",
+    }
+  end
+
+  review.setup({
+    keymaps = { review = false, apply = false, apply_all = false },
+    quickfix = { auto_open = true },
+    _transport = function(_, _, callback)
+      callback(nil, { findings = findings })
+      return { kill = function() end }
+    end,
+  })
+  review.review()
+  local quickfix_window
+  for _, window in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+    local info = vim.fn.getwininfo(window)[1]
+    if info and info.quickfix == 1 and info.loclist == 0 then
+      quickfix_window = window
+      break
+    end
+  end
+  assert(quickfix_window)
+  equal(#vim.fn.getqflist(), 6)
+  vim.api.nvim_set_current_win(quickfix_window)
+  vim.api.nvim_win_set_cursor(quickfix_window, { 2, 0 })
+  vim.api.nvim_feedkeys("Vjj:AIProofreadApply\n", "x", false)
+
+  equal(vim.api.nvim_buf_get_lines(buffer, 0, -1, false), {
+    "Teh first.",
+    "The second.",
+    "The third.",
+    "The fourth.",
+    "Teh fifth.",
+    "Teh sixth.",
+  })
+  local remaining = vim.fn.getqflist({ items = 1 })
+  equal(#remaining.items, 3)
+  equal(remaining.items[1].lnum, 1)
+  equal(remaining.items[2].lnum, 5)
+  equal(remaining.items[3].lnum, 6)
+  vim.api.nvim_set_current_win(source_window)
+  vim.cmd("undo")
+  equal(vim.api.nvim_buf_get_lines(buffer, 0, -1, false), {
+    "Teh first.",
+    "Teh second.",
+    "Teh third.",
+    "Teh fourth.",
+    "Teh fifth.",
+    "Teh sixth.",
+  })
+  vim.cmd("cclose")
+end)
+
+test("quickfix range rejects stale entries before applying any edits", function()
+  local review = require("ai-proofread")
+  local buffer = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_set_current_buf(buffer)
+  vim.bo[buffer].filetype = "text"
+  vim.api.nvim_buf_set_lines(buffer, 0, -1, false, {
+    "Teh first.",
+    "Teh second.",
+    "Teh third.",
+  })
+  local source_window = vim.api.nvim_get_current_win()
+  review.setup({
+    keymaps = { review = false, apply = false, apply_all = false },
+    quickfix = { auto_open = true },
+    _transport = function(_, _, callback)
+      callback(nil, {
+        findings = {
+          {
+            type = "correction", category = "spelling",
+            original = "Teh first.", suggestion = "The first.",
+            message = "First spelling.",
+          },
+          {
+            type = "correction", category = "spelling",
+            original = "Teh second.", suggestion = "The second.",
+            message = "Second spelling.",
+          },
+          {
+            type = "correction", category = "spelling",
+            original = "Teh third.", suggestion = "The third.",
+            message = "Third spelling.",
+          },
+        },
+      })
+      return { kill = function() end }
+    end,
+  })
+  review.review()
+  local ok = pcall(vim.cmd, "1,2AIProofreadApply")
+  equal(ok, false)
+  equal(vim.api.nvim_buf_get_lines(buffer, 0, -1, false), {
+    "Teh first.", "Teh second.", "Teh third.",
+  })
+  vim.api.nvim_buf_set_text(buffer, 2, 0, 2, 3, { "The" })
+  vim.cmd("copen")
+  ok = pcall(vim.cmd, "1,3AIProofreadApply")
+  equal(ok, true)
+  equal(vim.api.nvim_buf_get_lines(buffer, 0, -1, false), {
+    "Teh first.", "Teh second.", "The third.",
+  })
+  equal(#vim.fn.getqflist(), 3)
+  vim.api.nvim_set_current_win(source_window)
+  vim.cmd("cclose")
+end)
+
 test("remaining corrections follow an individually applied edit", function()
   local review = require("ai-proofread")
   local buffer = vim.api.nvim_create_buf(false, true)

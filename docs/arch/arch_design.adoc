@@ -5,8 +5,8 @@
 :sectnums:
 :icons: font
 :source-highlighter: rouge
-:revnumber: 0.16
-:revdate: 2026-11-23
+:revnumber: 0.17
+:revdate: 2026-11-25
 
 == Architecture Overview
 
@@ -1177,13 +1177,23 @@ Individual application shall:
 
 Bulk application shall:
 
-. Select all unapplied findings from the latest review.
+. Select all unapplied findings from the latest review, or
+  only those in an explicit quickfix command range.
 . Resolve and verify every tracked source range.
 . Reject duplicate or overlapping ranges.
 . Abort without edits if any preflight check fails.
 . Apply edits from the end of the buffer towards the start.
 . Join the changes into one Neovim undo step.
 . Remove all applied entries from quickfix.
+
+An explicit range on `:AIProofreadApply` shall refer only
+to rows in the active AI Proofread quickfix window.
+The command shall reject source-buffer and location-list
+ranges without changing the document.
+Selected rows shall resolve by immutable finding identifier
+and belong to the same active review.
+Normal invocation without a range shall still apply only
+the current quickfix entry.
 
 Applied findings shall not be applied again.
 Failed or stale findings shall remain in quickfix.

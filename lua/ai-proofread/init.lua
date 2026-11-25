@@ -166,7 +166,10 @@ function M.health()
   return require("ai-proofread.health").check(current_config)
 end
 
-function M.apply()
+function M.apply(first, last)
+  if first then
+    return require("ai-proofread.apply").range(first, last)
+  end
   return require("ai-proofread.apply").current()
 end
 

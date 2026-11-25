@@ -223,6 +223,8 @@ Check whether the selected backend and model are available.
 
 `AIProofreadApply`::
 Apply the correction at the current quickfix entry.
+With a visual line selection in the AI Proofread quickfix
+window, apply only the selected entries as one undo step.
 
 `AIProofreadApplyAll`::
 Apply all remaining corrections from the latest review.
@@ -270,6 +272,9 @@ needed.
   location without leaving the quickfix window.
 . Apply the current quickfix correction with
   `:AIProofreadApply` or `<leader>aa`.
+. To apply several entries, select their quickfix rows in
+  Visual Line mode (`V`), then type `:AIProofreadApply`.
+  Neovim supplies the selected range automatically.
 . Ignore the current recommendation with
   `:AIProofreadIgnore` or `<leader>ai`.
 . Alternatively, apply every remaining published correction
@@ -280,6 +285,8 @@ The current correction is the entry selected in the
 AI Proofread quickfix list.
 The apply command can be invoked from either the quickfix
 window or the reviewed buffer.
+Range application is available only from the AI Proofread
+quickfix window; a range of document lines is not accepted.
 
 The latest review replaces the previous AI Proofread
 results for that buffer.
@@ -323,6 +330,8 @@ matches the reviewed text.
 Bulk application preflights every correction, rejects stale
 or overlapping ranges, and applies all corrections as one
 undoable change.
+Visual-range application uses the same safeguards but edits
+only the selected quickfix entries.
 
 After an individual correction succeeds, its quickfix entry
 is removed and the next outstanding recommendation becomes

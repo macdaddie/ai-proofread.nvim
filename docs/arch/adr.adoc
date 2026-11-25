@@ -5,8 +5,8 @@
 :sectnums:
 :icons: font
 :source-highlighter: rouge
-:revnumber: 0.13
-:revdate: 2026-11-23
+:revnumber: 0.14
+:revdate: 2026-11-25
 
 == Purpose
 
@@ -185,6 +185,10 @@ Superseded decisions shall not be deleted.
 
 |039
 |Bound fm chunks and report review progress
+|Accepted
+
+|040
+|Apply a visual quickfix range as one guarded batch
 |Accepted
 |===
 
@@ -2390,6 +2394,57 @@ A progress module owns the message lifecycle and timer.
 
 Tests shall cover the backend-specific chunk budget,
 validation, progress updates, final status and the status API.
+
+=== ADR-040: Apply a Visual Quickfix Range
+
+Status:: Accepted
+Date:: 2026-11-25
+Refines:: ADR-029, ADR-035
+
+==== Context
+
+Authors can apply one current finding or every outstanding
+finding, but cannot choose a contiguous subset in quickfix.
+
+The existing bulk path already preflights source ranges,
+checks overlap, applies from the end and joins the edits.
+
+==== Decision
+
+An explicit range on `:AIProofreadApply` shall identify the
+selected rows in the AI Proofread quickfix window.
+Visual Line selection followed by the command shall pass
+that range through Neovim's standard Ex command behaviour.
+
+The command shall resolve each selected row by its immutable
+finding identifier and reject unrelated lists, location
+lists, source-buffer ranges and inactive findings.
+All selected findings shall belong to one review and buffer.
+
+The selected batch shall use the existing bulk preflight,
+reverse-order edits and single undo step.
+No selected entry shall be removed if preflight fails.
+An un-ranged invocation shall retain its individual
+application behaviour.
+`:AIProofreadApplyAll` shall still apply all outstanding
+findings.
+
+==== Rationale
+
+Reusing the verified bulk path preserves the source-match
+and overlap guarantees without introducing a second editing
+algorithm.
+Restricting ranges to quickfix prevents document line numbers
+from accidentally selecting unrelated corrections.
+
+==== Consequences
+
+The apply command accepts Ex ranges only in the AI Proofread
+quickfix window.
+User-facing documentation shall show Visual Line mode and the
+explicit command.
+Tests shall cover subset selection, unchanged findings,
+atomic preflight and one undo step.
 
 == Decision Governance
 

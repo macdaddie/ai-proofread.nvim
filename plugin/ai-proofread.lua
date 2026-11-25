@@ -27,10 +27,15 @@ end, {
   desc = "Check the AI Proofread configuration",
 })
 
-vim.api.nvim_create_user_command("AIProofreadApply", function()
-  require("ai-proofread").apply()
+vim.api.nvim_create_user_command("AIProofreadApply", function(args)
+  if args.range > 0 then
+    require("ai-proofread").apply(args.line1, args.line2)
+  else
+    require("ai-proofread").apply()
+  end
 end, {
   desc = "Apply the current AI Proofread correction",
+  range = true,
 })
 
 vim.api.nvim_create_user_command("AIProofreadApplyAll", function()

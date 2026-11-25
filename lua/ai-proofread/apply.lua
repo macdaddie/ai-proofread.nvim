@@ -331,16 +331,9 @@ end
 -- Preflight every range before editing. Edits run from the end of the buffer
 -- towards the start, are joined into one undo step, and the aggregate deltas
 -- are reported once.
-function M.all()
-  local state = state_for_all()
-  if not state then
-    local message = "no active corrections for this buffer"
-    notify(message, vim.log.levels.ERROR)
-    return nil, message
-  end
-
+local function apply_findings(state, findings)
   local pending = {}
-  for _, finding in ipairs(state.findings) do
+  for _, finding in ipairs(findings) do
     if not finding.applied and not finding.ignored then
       local range, err = resolve(finding)
       if not range then
@@ -435,6 +428,60 @@ function M.all()
 
   notify(string.format("applied %d corrections", #pending))
   return true
+end
+
+function M.all()
+  local state = state_for_all()
+  if not state then
+    local message = "no active corrections for this buffer"
+    notify(message, vim.log.levels.ERROR)
+    return nil, message
+  end
+  return apply_findings(state, state.findings)
+end
+
+-- Explicit Ex ranges refer to quickfix rows, not source-buffer lines.
+function M.range(first, last)
+  local info = vim.fn.getwininfo(vim.api.nvim_get_current_win())[1]
+  local quickfix = vim.fn.getqflist({
+    id = 0,
+    items = 1,
+    title = 1,
+    context = 1,
+  })
+  if not info or info.quickfix ~= 1 or info.loclist ~= 0
+    or quickfix.title ~= "AI Proofread"
+    or type(quickfix.context) ~= "table"
+    or first < 1 or first > last or last > #quickfix.items
+  then
+    local message = "select entries in the AI Proofread quickfix window"
+    notify(message, vim.log.levels.ERROR)
+    return nil, message
+  end
+
+  local findings
+  local state
+  for index = first, last do
+    local item = quickfix.items[index]
+    local user_data = item.user_data
+    local id = type(user_data) == "table"
+        and user_data.ai_proofread_id
+      or nil
+    local candidate = states[item.bufnr]
+    local finding = candidate and candidate.by_id[id] or nil
+    if not finding or candidate.review_id ~= quickfix.context.review_id
+      or (state and state ~= candidate)
+    then
+      local message = "selected quickfix entry is not an active correction"
+      notify(message, vim.log.levels.ERROR)
+      return nil, message
+    end
+    state = candidate
+    findings = findings or {}
+    findings[#findings + 1] = finding
+  end
+
+  return apply_findings(state, findings)
 end
 
 return M
